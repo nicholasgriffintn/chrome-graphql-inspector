@@ -5,9 +5,12 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "package": "zip -r graphql-inspector.zip manifest.json src icons README.md LICENSE package.json"
+    "package": "zip -FS -r graphql-inspector.zip manifest.json src icons README.md LICENSE package.json"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
   }
 }

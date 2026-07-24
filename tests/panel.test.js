@@ -101,7 +101,7 @@ test("renders GraphQL requests from HAR backfill", async () => {
   assert.equal(document.getElementById("mutationCount").textContent, "0");
   assert.match(document.getElementById("requests").textContent, /articles/);
   assert.match(document.getElementById("requests").textContent, /getStatus/);
-  assert.equal(document.querySelectorAll(".badge.query").length, 2);
+  assert.equal(document.querySelectorAll("#requests .badge.query").length, 2);
 
   document.querySelector(".request").click();
   assert.ok(document.getElementById("variablesView").querySelector(".json-key"));

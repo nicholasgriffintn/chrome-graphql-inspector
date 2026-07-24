@@ -512,7 +512,7 @@ svg {
 
 .operation-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   min-height: 58px;
   border-top: 1px solid var(--border);
   background: linear-gradient(180deg, var(--surface), #11131a);
@@ -568,6 +568,10 @@ svg {
   background: var(--subscription);
 }
 
+.operation-summary [data-summary-filter="unknown"].active::after {
+  background: var(--muted);
+}
+
 .error-summary:has(input:checked)::after {
   background: var(--error);
 }
@@ -616,6 +620,10 @@ svg {
 
 .subscription-dot {
   background: var(--subscription);
+}
+
+.unknown-dot {
+  background: var(--muted);
 }
 
 .error-dot {

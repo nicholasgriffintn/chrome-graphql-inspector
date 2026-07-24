@@ -1,5 +1,6 @@
-import { parseGraphQLPayload, looksGraphQL, parseMultipart, formatGraphQLQuery, formatJson, inferOperationTypeFromHeaders, safeJsonParse } from "./graphql.js";
+import { parseGraphQLPayload, looksGraphQL, parseMultipart, formatGraphQLQuery, formatJson, inferOperationName, inferOperationTypeFromHeaders, safeJsonParse } from "./graphql.js";
 import { toCurl, toFetch, downloadJson } from "./exports.js";
+import { headersToObject, requestHeadersForReplay } from "./headers.js";
 import { renderCode, renderObjectTree, renderRawCode } from "./panel-renderers.js";
 import {
   badgeLabel,
@@ -8,11 +9,15 @@ import {
   boundedJson,
   escapeHtml,
   filterItems,
+  findClosestHttpRecord,
+  findEquivalentHttpCapture,
   formatAbsoluteTime,
   formatDuration,
   formatRelativeTime,
   getOperationCounts,
   isErrorItem,
+  isReplayableItem,
+  operationStatusLabel,
   parseOptionalJson,
   shortUrl
 } from "./panel-model.js";
@@ -23,7 +28,7 @@ const state = { items: [], selectedId: null, ws: new Map(), http: new Map(), gra
 const $ = id => document.getElementById(id);
 const els = Object.fromEntries([
   "modeInspector","modeGraphiql","inspectorView","graphiqlView","inspectorActions","captureTotal","captureNumber",
-  "search","typeFilter","typeSegments","errorsOnly","preserve","requestCount","resetFilters","clear","exportAll","requests","empty","queryCount","mutationCount","subscriptionCount","errorCount",
+  "search","typeFilter","typeSegments","errorsOnly","preserve","requestCount","resetFilters","clear","exportAll","requestListWrap","requests","empty","queryCount","mutationCount","subscriptionCount","unknownCount","errorCount",
   "noSelection","detail","detailType","detailName","detailEndpoint","detailPersisted","detailMeta","detailStatus","detailDuration","responseState","responseViewToggle","copyResponse","openGraphiql","queryView","variablesView","extensionsView","extensionsSection","responseView","responseRawView","headersView","timingSummary","timelineView","copyCurl","copyFetch","copyJson","tabs",
   "graphiqlEndpoint","graphiqlMethod","graphiqlUseSelected","graphiqlSend","graphiqlSendLabel","graphiqlOperationName","graphiqlQuery","graphiqlInputTabs","graphiqlVariables","graphiqlHeaders","graphiqlStatus","graphiqlTabs","graphiqlCopyResponse","graphiqlResponse","graphiqlResponseRaw","graphiqlResponseHeaders","toast"
 ].map(id => [id, $(id)]));
@@ -87,7 +92,7 @@ function loadHarEntries() {
         responseText,
         phase: "complete",
         source: "har"
-      });
+      }, false);
       captured += 1;
     }
     state.diagnostics.har = captured;
@@ -99,27 +104,18 @@ function handleStreamEvent(message) {
   if (message.type?.startsWith("http-request-")) return handleHttpEvent(message);
   if (message.type === "graphiql-result") return handleGraphiqlResult(message);
   if (message.type === "ws-frame") return handleWsFrame(message);
-  if (message.type === "sse-message") {
-    const parsed = safeJsonParse(message.data) ?? message.data;
-    const id = `sse:${message.sourceId}`;
-    let item = state.items.find(x => x.id === id);
-    if (!item) {
-      item = { id, source: "sse", url: message.url, method: "SSE", status: 200, startedAt: message.at, duration: null, operationName: "SSE subscription", operationType: "subscription", query: "", variables: {}, requestHeaders: [], responseHeaders: [], response: [], timeline: [] };
-      addItem(item);
-    }
-    item.response.push(parsed);
-    item.timeline.push({ at: message.at, direction: "in", data: summarizeTimelineData(parsed) });
-    item.searchIndex = buildSearchIndex(item);
-    render();
-  }
+  if (message.type === "ws-close") return handleWsClose(message);
+  if (message.type === "sse-message") return handleSseMessage(message);
+  if (message.type === "sse-close" || message.type === "sse-error") return handleSseEnd(message);
 }
 
 function handleHttpEvent(message) {
   const postData = message.requestBody || "";
   const responseText = message.responseText || "";
   if (!looksGraphQL({ url: message.url, method: message.method, postData, responseText })) return;
-  const requestId = message.source === "private-graphql-inspector" ? `hook:${message.requestId}` : message.requestId;
-  if (message.source === "background") state.diagnostics.background += 1;
+  const captureSource = message.source === "background" ? "background" : "hook";
+  const requestId = captureSource === "hook" ? `hook:${message.requestId}` : message.requestId;
+  if (captureSource === "background") state.diagnostics.background += 1;
   pruneHttpRecords();
   state.http.set(requestId, {
     requestId,
@@ -127,7 +123,8 @@ function handleHttpEvent(message) {
     method: message.method,
     requestBody: postData,
     requestHeaders: message.requestHeaders || [],
-    startedAt: message.startedAt || message.at
+    startedAt: message.startedAt || message.at,
+    source: captureSource
   });
   addHttpItems({
     requestId,
@@ -142,30 +139,45 @@ function handleHttpEvent(message) {
     responseText,
     error: message.error,
     phase: message.type === "http-request-start" ? "start" : message.type === "http-request-error" ? "error" : "complete",
-    source: message.source === "background" ? "background" : "hook"
+    source: captureSource
   });
 }
 
-function addHttpItems(event) {
+function addHttpItems(event, renderAfter = true) {
   const postData = event.requestBody || "";
   const responseText = event.responseText || "";
   const payloads = parseGraphQLPayload(postData, event.url);
   if (!payloads.length) payloads.push({ query: "", operationName: "GraphQL request", operationType: "unknown", variables: {}, extensions: {} });
   const responseHeaders = event.responseHeaders || [];
-  const contentType = responseHeaders.find(h => h.name.toLowerCase() === "content-type")?.value || "";
+  const contentType = responseHeaders.find(header => String(header?.name || "").toLowerCase() === "content-type")?.value || "";
   const multipart = parseMultipart(responseText, contentType);
   const parsedResponse = multipart ?? safeJsonParse(responseText) ?? responseText;
   const headerOperationType = inferOperationTypeFromHeaders(event.requestHeaders);
+  const equivalent = findEquivalentHttpCapture(state.items, event);
+  const requestId = equivalent?.requestId || event.requestId;
 
   payloads.forEach((payload, batchIndex) => {
-    const id = `http:${event.requestId}:${batchIndex}`;
+    const id = `http:${requestId}:${batchIndex}`;
     const existing = state.items.find(item => item.id === id);
+    const captureSources = [...new Set([
+      ...(existing?.captureSources || equivalent?.captureSources || []),
+      event.source
+    ])];
+    const captureIds = {
+      ...(existing?.captureIds || equivalent?.captureIds || {}),
+      [event.source]: event.requestId
+    };
     const item = {
       id,
+      requestId,
       source: "http",
       batchIndex,
       batchSize: payloads.length,
       captureSource: event.source,
+      captureSources,
+      captureIds,
+      phase: event.phase,
+      error: event.error ?? existing?.error,
       url: event.url,
       method: event.method,
       status: event.status,
@@ -183,12 +195,18 @@ function addHttpItems(event) {
     };
     item.searchIndex = buildSearchIndex(item);
     if (existing) {
-      Object.assign(existing, item, { timeline: mergeTimeline(existing.timeline, item.timeline) });
-      render();
+      const timeline = mergeTimeline(existing.timeline, item.timeline);
+      if (existing.phase !== "start" && event.phase === "start") {
+        Object.assign(existing, { captureSources, captureIds, timeline });
+      } else {
+        Object.assign(existing, item, { timeline });
+      }
+      existing.searchIndex = buildSearchIndex(existing);
     } else {
-      addItem(item);
+      addItem(item, false);
     }
   });
+  if (renderAfter) render();
 }
 
 function handleWsFrame(message) {
@@ -206,13 +224,65 @@ function handleWsFrame(message) {
   if (!item) return;
   item.timeline.push({ at: message.at, direction: message.direction, data: summarizeTimelineData(frame) });
   if (message.direction === "in" && ["next", "data", "error"].includes(type)) item.response.push(frame.payload ?? frame);
-  if (["complete", "stop"].includes(type)) item.duration = message.at - item.startedAt;
+  if (type === "error") item.error = frame.payload || "Subscription error";
+  if (["complete", "stop"].includes(type)) {
+    item.duration = message.at - item.startedAt;
+    state.ws.delete(key);
+  }
   item.searchIndex = buildSearchIndex(item);
   render();
 }
 
-function addItem(item) { state.items.unshift(item); state.selectedId ||= item.id; render(); }
-function clear() { state.items = []; state.ws.clear(); state.http.clear(); state.diagnostics = { background: 0, network: 0, har: 0 }; state.selectedId = null; render(); }
+function handleWsClose(message) {
+  let changed = false;
+  for (const [key, item] of state.ws) {
+    if (!key.startsWith(`${message.socketId}:`)) continue;
+    item.duration = Math.max(0, message.at - item.startedAt);
+    item.timeline.push({ at: message.at, direction: "close", data: { code: message.code, reason: message.reason } });
+    item.searchIndex = buildSearchIndex(item);
+    state.ws.delete(key);
+    changed = true;
+  }
+  if (changed) render();
+}
+
+function handleSseMessage(message) {
+  const parsed = safeJsonParse(message.data) ?? message.data;
+  const id = `sse:${message.sourceId}`;
+  let item = state.items.find(x => x.id === id);
+  if (!item) {
+    item = { id, source: "sse", url: message.url, method: "SSE", status: 200, startedAt: message.at, duration: null, operationName: "SSE subscription", operationType: "subscription", query: "", variables: {}, requestHeaders: [], responseHeaders: [], response: [], timeline: [] };
+    addItem(item, false);
+  }
+  item.response.push(parsed);
+  item.timeline.push({ at: message.at, direction: "in", data: summarizeTimelineData(parsed) });
+  item.searchIndex = buildSearchIndex(item);
+  render();
+}
+
+function handleSseEnd(message) {
+  const item = state.items.find(candidate => candidate.id === `sse:${message.sourceId}`);
+  if (!item) return;
+  item.timeline.push({ at: message.at, direction: message.type === "sse-error" ? "error" : "close", data: message.type });
+  if (message.type === "sse-close" || message.readyState === 2) item.duration = Math.max(0, message.at - item.startedAt);
+  if (message.type === "sse-error" && message.readyState === 2) item.error = "EventSource closed after an error.";
+  item.searchIndex = buildSearchIndex(item);
+  render();
+}
+
+function addItem(item, renderAfter = true) {
+  state.items.unshift(item);
+  state.selectedId ||= item.id;
+  if (renderAfter) render();
+}
+function clear() {
+  state.items = [];
+  state.ws.clear();
+  state.http.clear();
+  state.diagnostics = { background: 0, network: 0, har: 0 };
+  state.selectedId = null;
+  render({ resetScroll: true });
+}
 function selected() { return state.items.find(x => x.id === state.selectedId); }
 function getRequestContent(request) {
   return new Promise(resolve => {
@@ -233,12 +303,12 @@ function decodeHarContent(content = {}) {
   return content.text;
 }
 function findMatchingHttpRequest(url, method, requestBody, startedAt) {
-  return Array.from(state.http.values()).find(record =>
-    record.url === url &&
-    record.method === method &&
-    (!record.requestBody || !requestBody || record.requestBody === requestBody) &&
-    Math.abs(record.startedAt - startedAt) < 10000
-  );
+  return findClosestHttpRecord(state.http.values(), {
+    url,
+    method,
+    requestBody,
+    startedAt,
+  });
 }
 function pruneHttpRecords() {
   const cutoff = Date.now() - 60000;
@@ -266,15 +336,6 @@ function summarizeTimelineData(value, rawLength) {
     preview: text.slice(0, 1000)
   };
 }
-function hasCapturedHttpRequest(url, method, requestBody, startedAt) {
-  return state.items.some(item =>
-    item.source === "http" &&
-    item.url === url &&
-    item.method === method &&
-    (!item.requestBody || !requestBody || item.requestBody === requestBody) &&
-    Math.abs(item.startedAt - startedAt) < 10000
-  );
-}
 function visibleItems() {
   return filterItems(state.items, {
     search: els.search.value,
@@ -283,18 +344,23 @@ function visibleItems() {
   });
 }
 
-function render() {
+function render({ resetScroll = false } = {}) {
   const items = visibleItems();
   if (!items.some(item => item.id === state.selectedId)) state.selectedId = items[0]?.id ?? null;
   const counts = getOperationCounts(state.items);
+  const scrollTop = resetScroll ? 0 : els.requestListWrap.scrollTop;
 
   els.captureNumber.textContent = state.items.length;
   els.requestCount.textContent = `${items.length}/${state.items.length}`;
   els.queryCount.textContent = counts.query;
   els.mutationCount.textContent = counts.mutation;
   els.subscriptionCount.textContent = counts.subscription;
+  els.unknownCount.textContent = counts.unknown;
   els.errorCount.textContent = counts.errors;
   els.resetFilters.disabled = !els.search.value && els.typeFilter.value === "all" && !els.errorsOnly.checked;
+  els.clear.disabled = state.items.length === 0;
+  els.exportAll.disabled = items.length === 0;
+  els.graphiqlUseSelected.disabled = !isReplayableItem(selected());
 
   for (const button of els.typeSegments.querySelectorAll("[data-type-filter]")) {
     const active = button.dataset.typeFilter === els.typeFilter.value;
@@ -312,11 +378,12 @@ function render() {
   els.requests.replaceChildren(...items.map(item => {
     const div = document.createElement("div");
     const error = isErrorItem(item);
+    const selectedRow = item.id === state.selectedId;
     div.className = `request${item.id === state.selectedId ? " selected" : ""}${error ? " error" : ""}`;
     div.role = "option";
-    div.tabIndex = 0;
+    div.tabIndex = selectedRow ? 0 : -1;
     div.dataset.requestId = item.id;
-    div.setAttribute("aria-selected", item.id === state.selectedId ? "true" : "false");
+    div.setAttribute("aria-selected", String(selectedRow));
     div.innerHTML = `
       <span class="badge ${badgeType(item)}">${escapeHtml(badgeLabel(item))}</span>
       <span class="request-main">
@@ -324,7 +391,7 @@ function render() {
         <span class="endpoint" title="${escapeHtml(item.url)}">${escapeHtml(shortUrl(item.url))}</span>
       </span>
       <span class="request-meta">
-        <span class="request-status">${escapeHtml(String(item.status ?? "pending"))}</span>
+        <span class="request-status">${escapeHtml(operationStatusLabel(item))}</span>
         <span>${escapeHtml(formatDuration(item.duration))}</span>
         <span class="request-time" data-started-at="${escapeHtml(String(item.startedAt))}">${escapeHtml(formatRelativeTime(item.startedAt))}</span>
       </span>`;
@@ -332,6 +399,7 @@ function render() {
     div.onkeydown = event => handleRequestKeydown(event, items, item.id);
     return div;
   }));
+  els.requestListWrap.scrollTop = scrollTop;
   renderDetail();
 }
 
@@ -341,6 +409,7 @@ function selectRequest(itemId) {
     const selected = request.dataset.requestId === itemId;
     request.classList.toggle("selected", selected);
     request.setAttribute("aria-selected", String(selected));
+    request.tabIndex = selected ? 0 : -1;
   }
   renderDetail();
 }
@@ -375,27 +444,44 @@ function renderDetail() {
   if (!item) return;
 
   const error = isErrorItem(item);
-  const responsePending = item.status === undefined || item.status === null;
+  const responsePending = item.phase === "start"
+    || (item.status === undefined && !item.error && item.duration === null);
+  const statusLabel = operationStatusLabel(item);
+  const replayable = isReplayableItem(item);
   els.detailType.className = `badge ${badgeType(item)}`;
   els.detailType.textContent = badgeLabel(item);
   els.detailName.textContent = item.operationName;
   els.detailEndpoint.textContent = item.url;
   els.detailEndpoint.title = item.url;
   els.detailPersisted.hidden = !item.persisted;
-  els.detailMeta.textContent = `${item.operationType} • ${item.method} • ${item.status ?? "pending"} • ${item.url}${item.batchSize > 1 ? ` • batch ${item.batchIndex + 1}/${item.batchSize}` : ""}`;
-  els.detailStatus.textContent = String(item.status ?? "pending");
+  els.detailMeta.textContent = `${item.operationType} • ${item.method} • ${statusLabel} • ${item.url}${item.batchSize > 1 ? ` • batch ${item.batchIndex + 1}/${item.batchSize}` : ""}`;
+  els.detailStatus.textContent = statusLabel;
   els.detailStatus.classList.toggle("error", error);
   els.detailDuration.textContent = formatDuration(item.duration);
-  els.responseState.textContent = responsePending ? "Waiting for response" : error ? "Response contains errors" : "OK";
+  els.responseState.textContent = responsePending
+    ? "Waiting for response"
+    : statusLabel === "failed"
+      ? "Request failed"
+      : error
+        ? "Response contains errors"
+        : "OK";
   els.responseState.classList.toggle("error", error);
+  els.copyResponse.disabled = responsePending;
+  els.openGraphiql.disabled = !replayable;
+  els.copyCurl.disabled = item.source !== "http";
+  els.copyFetch.disabled = item.source !== "http";
   renderCode(els.queryView, item.query ? formatGraphQLQuery(item.query) : (item.persisted ? item.extensions : "No query text captured."));
   renderCode(els.variablesView, item.variables ?? {});
   const hasExtensions = item.extensions && Object.keys(item.extensions).length > 0;
   els.extensionsSection.hidden = !hasExtensions;
   if (hasExtensions) renderCode(els.extensionsView, item.extensions);
-  renderObjectTree(els.responseView, item.response || "No response captured.");
-  renderRawCode(els.responseRawView, item.responseRaw || item.response || "No response captured.");
-  renderCode(els.headersView, { request: Object.fromEntries((item.requestHeaders || []).map(h => [h.name, h.value])), response: Object.fromEntries((item.responseHeaders || []).map(h => [h.name, h.value])) });
+  const response = item.response || (item.error ? { error: item.error } : "No response captured.");
+  renderObjectTree(els.responseView, response);
+  renderRawCode(els.responseRawView, item.responseRaw || response);
+  renderCode(els.headersView, {
+    request: headersToObject(item.requestHeaders),
+    response: headersToObject(item.responseHeaders)
+  });
   renderTimingSummary(item);
   renderRawCode(els.timelineView, item.timeline || [{ at: item.startedAt, duration: item.duration }]);
 }
@@ -405,7 +491,7 @@ function renderTimingSummary(item) {
     ["Started", formatAbsoluteTime(item.startedAt)],
     ["Duration", formatDuration(item.duration)],
     ["Transport", item.method || item.source?.toUpperCase() || "Unknown"],
-    ["Capture source", item.captureSource || item.source || "Unknown"]
+    ["Capture source", item.captureSources?.join(" + ") || item.captureSource || item.source || "Unknown"]
   ];
   els.timingSummary.replaceChildren(...cards.map(([label, value]) => {
     const card = document.createElement("div");
@@ -466,15 +552,16 @@ function setMode(mode) {
 
 function populateGraphiqlFromSelected(overwrite = true) {
   const item = selected();
-  if (!item) return;
+  if (!isReplayableItem(item)) return;
   if (overwrite || !els.graphiqlEndpoint.value) els.graphiqlEndpoint.value = item.url;
   if (overwrite || !els.graphiqlQuery.value) els.graphiqlQuery.value = formatGraphQLQuery(item.query || "");
   if (overwrite || !els.graphiqlVariables.value) els.graphiqlVariables.value = formatJson(item.variables || {});
+  if (overwrite || !els.graphiqlOperationName.value) els.graphiqlOperationName.value = inferOperationName(item.query);
   if (overwrite || !els.graphiqlHeaders.value) {
-    const headers = Object.fromEntries((item.requestHeaders || [])
-      .filter(header => !/^content-length$/i.test(header.name))
-      .map(header => [header.name, header.value]));
-    els.graphiqlHeaders.value = formatJson({ "content-type": "application/json", ...headers });
+    els.graphiqlHeaders.value = formatJson(requestHeadersForReplay(
+      item.requestHeaders,
+      { includeJsonContentType: String(item.method).toUpperCase() !== "GET" },
+    ));
   }
 }
 
@@ -488,9 +575,14 @@ function sendGraphiqlRequest() {
   }
   let variables;
   let headers;
+  const method = els.graphiqlMethod.value;
   try {
     variables = parseOptionalJson(els.graphiqlVariables.value, "Variables");
-    headers = { "content-type": "application/json", ...parseOptionalJson(els.graphiqlHeaders.value, "Headers") };
+    const parsedHeaders = parseOptionalJson(els.graphiqlHeaders.value, "Headers");
+    headers = requestHeadersForReplay(
+      Object.entries(parsedHeaders).map(([name, value]) => ({ name, value })),
+      { includeJsonContentType: method !== "GET" },
+    );
   } catch (error) {
     renderGraphiqlError(error.message);
     return;
@@ -508,7 +600,7 @@ function sendGraphiqlRequest() {
 
   const payload = {
     url,
-    method: els.graphiqlMethod.value,
+    method,
     query,
     variables,
     operationName: els.graphiqlOperationName.value.trim() || undefined,
@@ -669,11 +761,11 @@ function closeActionMenu() {
   if (menu) menu.open = false;
 }
 
-els.search.oninput = render;
-els.typeFilter.onchange = render;
-els.errorsOnly.onchange = render;
+els.search.oninput = () => render({ resetScroll: true });
+els.typeFilter.onchange = () => render({ resetScroll: true });
+els.errorsOnly.onchange = () => render({ resetScroll: true });
 els.preserve.onchange = () => { state.preserve = els.preserve.checked; chrome.storage.local.set({ preserve: state.preserve }); };
-els.resetFilters.onclick = () => { els.search.value = ""; els.typeFilter.value = "all"; els.errorsOnly.checked = false; render(); };
+els.resetFilters.onclick = () => { els.search.value = ""; els.typeFilter.value = "all"; els.errorsOnly.checked = false; render({ resetScroll: true }); };
 els.clear.onclick = clear;
 els.exportAll.onclick = () => downloadJson(`graphql-inspector-${new Date().toISOString().replace(/[:.]/g,"-")}.json`, visibleItems());
 els.copyCurl.onclick = () => { if (selected()) copy(toCurl(selected()), "cURL copied"); closeActionMenu(); };
@@ -682,7 +774,14 @@ els.copyJson.onclick = () => { if (selected()) copy(JSON.stringify(selected(), n
 els.copyResponse.onclick = () => {
   const item = selected();
   if (!item) return;
-  copy(item.responseRaw || JSON.stringify(item.response, null, 2), "Response copied");
+  const response =
+    item.responseRaw ||
+    JSON.stringify(
+      item.response ?? (item.error ? { error: item.error } : ""),
+      null,
+      2,
+    );
+  copy(response, "Response copied");
 };
 els.openGraphiql.onclick = () => {
   populateGraphiqlFromSelected(true);
@@ -693,6 +792,11 @@ els.modeInspector.onclick = () => setMode("inspector");
 els.modeGraphiql.onclick = () => setMode("graphiql");
 els.graphiqlUseSelected.onclick = () => populateGraphiqlFromSelected(true);
 els.graphiqlSend.onclick = sendGraphiqlRequest;
+els.graphiqlView.onkeydown = event => {
+  if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey) || els.graphiqlSend.disabled) return;
+  event.preventDefault();
+  sendGraphiqlRequest();
+};
 els.graphiqlCopyResponse.onclick = () => {
   if (state.graphiqlLastResponse) copy(state.graphiqlLastResponse, "GraphQLi response copied");
 };
@@ -700,14 +804,14 @@ els.typeSegments.onclick = event => {
   const button = event.target.closest("[data-type-filter]");
   if (!button) return;
   els.typeFilter.value = button.dataset.typeFilter;
-  render();
+  render({ resetScroll: true });
 };
 for (const button of document.querySelectorAll("[data-summary-filter]")) {
   button.onclick = () => {
     els.typeFilter.value = els.typeFilter.value === button.dataset.summaryFilter
       ? "all"
       : button.dataset.summaryFilter;
-    render();
+    render({ resetScroll: true });
   };
 }
 els.responseViewToggle.onclick = event => {
@@ -761,7 +865,7 @@ document.addEventListener("keydown", event => {
   }
   if (event.key === "Escape" && document.activeElement === els.search && els.search.value) {
     els.search.value = "";
-    render();
+    render({ resetScroll: true });
   }
 });
 render();

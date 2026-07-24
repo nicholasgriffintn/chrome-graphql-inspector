@@ -70,7 +70,7 @@
         </div>
       </div>
 
-      <div class="request-list-wrap">
+      <div id="requestListWrap" class="request-list-wrap">
         <div id="empty" class="empty">
           <img class="empty-icon" src="../icons/icon48.png" alt="" aria-hidden="true">
           <strong>No GraphQL traffic yet</strong>
@@ -80,28 +80,35 @@
       </div>
 
       <footer class="operation-summary" aria-label="Capture summary">
-        <button type="button" data-summary-filter="query" aria-pressed="false" aria-label="Filter queries">
+        <button type="button" data-summary-filter="query" aria-pressed="false">
           <span class="summary-value">
             <strong id="queryCount">0</strong>
             <i class="query-dot" aria-hidden="true"></i>
           </span>
-          <span class="summary-label">Queries</span>
+          <span class="summary-label">Query</span>
         </button>
-        <button type="button" data-summary-filter="mutation" aria-pressed="false" aria-label="Filter mutations">
+        <button type="button" data-summary-filter="mutation" aria-pressed="false">
           <span class="summary-value">
             <strong id="mutationCount">0</strong>
             <i class="mutation-dot" aria-hidden="true"></i>
           </span>
-          <span class="summary-label">Mutations</span>
+          <span class="summary-label">Mutation</span>
         </button>
-        <button type="button" data-summary-filter="subscription" aria-pressed="false" aria-label="Filter subscriptions">
+        <button type="button" data-summary-filter="subscription" aria-pressed="false">
           <span class="summary-value">
             <strong id="subscriptionCount">0</strong>
             <i class="subscription-dot" aria-hidden="true"></i>
           </span>
           <span class="summary-label">Subs</span>
         </button>
-        <label class="error-summary" aria-label="Show errors only">
+        <button type="button" data-summary-filter="unknown" aria-pressed="false">
+          <span class="summary-value">
+            <strong id="unknownCount">0</strong>
+            <i class="unknown-dot" aria-hidden="true"></i>
+          </span>
+          <span class="summary-label">Other</span>
+        </button>
+        <label class="error-summary">
           <input id="errorsOnly" class="visually-hidden" type="checkbox">
           <span class="summary-value">
             <strong id="errorCount">0</strong>
@@ -253,8 +260,8 @@
       </section>
 
       <footer class="composer-footer">
-        <span>Uses the inspected page's cookies and browser security rules.</span>
-        <button id="graphiqlSend" class="primary-button" type="button">
+        <span>Uses the inspected page's browser context. Press Ctrl or Command + Enter to send.</span>
+        <button id="graphiqlSend" class="primary-button" type="button" title="Send request (Ctrl or Command + Enter)">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 2 11 6-11 6 2-6-2-6Z"/><path d="M5 8h8"/></svg>
           <span id="graphiqlSendLabel">Send request</span>
         </button>
@@ -296,8 +303,8 @@
     <summary aria-label="Help" title="Help">?</summary>
     <div>
       <span class="help-title"><img src="../icons/icon16.png" alt="" aria-hidden="true"><strong>GraphQL Inspector</strong></span>
-      <p>Reload the inspected page if traffic does not appear. Use <kbd>↑</kbd> and <kbd>↓</kbd> to move through operations.</p>
-      <p>GraphQLi sends requests from the inspected page, using its cookies and browser security rules.</p>
+      <p>Reload the inspected page if traffic does not appear. Press <kbd>/</kbd> to search and use <kbd>↑</kbd> or <kbd>↓</kbd> to move through operations.</p>
+      <p>GraphQLi sends from the inspected page. Press <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Enter</kbd> to run an operation.</p>
     </div>
   </details>
 

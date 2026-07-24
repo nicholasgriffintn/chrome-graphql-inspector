@@ -40,6 +40,7 @@ test("uses explicit operation-type headers when a persisted name is ambiguous", 
   assert.equal(inferOperationTypeFromHeaders([
     { name: "x-client-name", value: "example" }
   ]), "unknown");
+  assert.equal(inferOperationTypeFromHeaders([null, {}]), "unknown");
 });
 
 test("parses url encoded queries", () => {
@@ -90,11 +91,37 @@ test("parses multipart upload operations", () => {
   assert.deepEqual(result.variables, { file: null });
 });
 
+test("parses raw GraphQL documents", () => {
+  const result = parseGraphQLPayload("query Viewer { viewer { id } }")[0];
+  assert.equal(result.operationName, "Viewer");
+  assert.equal(result.operationType, "query");
+  assert.match(result.query, /viewer/);
+});
+
+test("infers operations when fragments appear before the selected operation", () => {
+  const document = "fragment UserFields on User { id } query Viewer { viewer { ...UserFields } }";
+  assert.equal(inferOperationName(document), "Viewer");
+  assert.equal(inferOperationType(document, "Viewer"), "query");
+});
+
 test("detects GraphQL request starts", () => {
   assert.equal(looksGraphQL({ url: "https://example.com/api", method: "POST", postData: "operationName=GetUser" }), true);
   assert.equal(looksGraphQL({ url: "https://example.com/graphql?query=query%20GetUser%20%7B%20viewer%20%7B%20id%20%7D%20%7D", method: "GET" }), true);
   assert.equal(looksGraphQL({ url: "https://example.com/gql", method: "POST", postData: JSON.stringify({ query: "{ viewer { id } }" }) }), true);
   assert.equal(looksGraphQL({ url: "https://example.com/api", method: "GET", responseText: JSON.stringify({ data: { viewer: { id: "1" } } }) }), true);
+});
+
+test("does not capture ordinary JSON that merely mentions GraphQL words", () => {
+  assert.equal(looksGraphQL({
+    url: "https://example.com/analytics",
+    method: "POST",
+    postData: JSON.stringify({ message: "query performance improved", data: "mutation rate" })
+  }), false);
+  assert.equal(looksGraphQL({
+    url: "https://example.com/search",
+    method: "POST",
+    postData: JSON.stringify({ query: "GraphQL developer tools" })
+  }), false);
 });
 
 test("does not infer GraphQL from pathnames alone", () => {

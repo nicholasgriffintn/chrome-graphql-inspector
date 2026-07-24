@@ -5,11 +5,15 @@ import {
   badgeType,
   escapeHtml,
   filterItems,
+  findClosestHttpRecord,
+  findEquivalentHttpCapture,
   formatDuration,
   formatRelativeTime,
   getOperationCounts,
   highlightJson,
   isErrorItem,
+  isReplayableItem,
+  operationStatusLabel,
   parseOptionalJson,
   shortUrl
 } from "../src/panel-model.js";
@@ -63,6 +67,11 @@ test("filters operations by type, errors and full-text search", () => {
   assert.deepEqual(filterItems(items, { errorsOnly: true }).map(item => item.operationName), ["SaveViewer", "Persisted 12345678"]);
   assert.deepEqual(filterItems(items, { search: "not allowed" }).map(item => item.operationName), ["SaveViewer"]);
   assert.deepEqual(filterItems(items, { search: "WSS://API.EXAMPLE.TEST" }).map(item => item.operationName), ["Updates"]);
+  assert.deepEqual(
+    filterItems([...items, { operationName: "Custom", operationType: "custom" }], { type: "unknown" })
+      .map(item => item.operationName),
+    ["Persisted 12345678", "Custom"],
+  );
 });
 
 test("counts every operation type and GraphQL errors", () => {
@@ -76,6 +85,84 @@ test("counts every operation type and GraphQL errors", () => {
   assert.equal(isErrorItem(items[0]), false);
   assert.equal(isErrorItem(items[1]), true);
   assert.equal(isErrorItem(items[3]), true);
+  assert.equal(isErrorItem({ status: undefined, error: "Failed to fetch" }), true);
+  assert.equal(isErrorItem({ source: "http", phase: "complete", status: 0 }), true);
+});
+
+test("matches the same HTTP request across capture sources without merging repeated requests", () => {
+  const captured = {
+    source: "http",
+    batchIndex: 0,
+    requestId: "background-1",
+    captureSources: ["background"],
+    captureIds: { background: "background-1" },
+    url: "https://api.example.test/graphql",
+    method: "POST",
+    requestBody: "{\"query\":\"query Viewer { viewer { id } }\"}",
+    startedAt: 1000
+  };
+  const hookEvent = {
+    source: "hook",
+    requestId: "hook-1",
+    url: captured.url,
+    method: "POST",
+    requestBody: captured.requestBody,
+    startedAt: 1025
+  };
+
+  assert.equal(findEquivalentHttpCapture([captured], hookEvent), captured);
+  assert.equal(findEquivalentHttpCapture([captured], { ...hookEvent, source: "background", requestId: "background-2" }), undefined);
+  captured.captureSources.push("hook");
+  captured.captureIds.hook = "hook-1";
+  assert.equal(findEquivalentHttpCapture([captured], hookEvent), captured);
+
+  const newer = {
+    ...captured,
+    requestId: "background-2",
+    captureSources: ["background"],
+    captureIds: { background: "background-2" },
+    startedAt: 1200
+  };
+  assert.equal(findEquivalentHttpCapture([newer, captured], {
+    ...hookEvent,
+    source: "network",
+    requestId: "network-1",
+    startedAt: 1010
+  }), captured);
+});
+
+test("matches an out-of-order completion to the closest pending request", () => {
+  const older = {
+    requestId: "older",
+    url: "https://api.example.test/graphql",
+    method: "POST",
+    requestBody: "{\"operationName\":\"ViewerQuery\"}",
+    startedAt: 1000,
+  };
+  const newer = { ...older, requestId: "newer", startedAt: 1200 };
+
+  assert.equal(findClosestHttpRecord([older, newer], {
+    url: newer.url,
+    method: newer.method,
+    requestBody: newer.requestBody,
+    startedAt: 1190,
+  }), newer);
+  assert.equal(findClosestHttpRecord([older, newer], {
+    url: newer.url,
+    method: newer.method,
+    requestBody: "{\"operationName\":\"DifferentQuery\"}",
+    startedAt: 1190,
+  }), undefined);
+});
+
+test("labels failed requests and only replays HTTP operations with query text", () => {
+  assert.equal(operationStatusLabel({ error: "Network error" }), "failed");
+  assert.equal(operationStatusLabel({ source: "http", phase: "complete", status: 0 }), "failed");
+  assert.equal(operationStatusLabel({ status: 204 }), "204");
+  assert.equal(operationStatusLabel({}), "pending");
+  assert.equal(isReplayableItem({ source: "http", method: "POST", query: "query Viewer { viewer { id } }" }), true);
+  assert.equal(isReplayableItem({ source: "ws", method: "WS", query: "subscription Updates { updates }" }), false);
+  assert.equal(isReplayableItem({ source: "http", method: "POST", query: "" }), false);
 });
 
 test("formats live, short and long request durations", () => {

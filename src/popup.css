@@ -1,0 +1,128 @@
+:root {
+  color-scheme: dark;
+  font: 12px/1.5 ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  --bg: #090a0e;
+  --surface: #0e1016;
+  --surface-raised: #151822;
+  --border: #292d3b;
+  --text: #e7e9f1;
+  --soft: #b6bac9;
+  --muted: #777d94;
+  --accent: #6c63ff;
+  --success: #15d5a0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 330px;
+  margin: 0;
+  background:
+    radial-gradient(circle at 8% 0, rgb(108 99 255 / 14%), transparent 38%),
+    var(--bg);
+  color: var(--text);
+}
+
+main {
+  padding: 18px;
+}
+
+header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding-bottom: 15px;
+  border-bottom: 1px solid var(--border);
+}
+
+header img {
+  width: 42px;
+  height: 42px;
+  filter: drop-shadow(0 7px 14px rgb(0 0 0 / 38%));
+}
+
+header span {
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1,
+h2 {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+h1 {
+  margin: 2px 0 0;
+  font-size: 16px;
+}
+
+section {
+  padding: 17px 0 15px;
+}
+
+h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+p {
+  margin: 5px 0 13px;
+  color: var(--muted);
+}
+
+ol {
+  display: grid;
+  gap: 7px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+li {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgb(21 24 34 / 82%);
+  color: var(--soft);
+}
+
+li > strong {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: rgb(108 99 255 / 15%);
+  color: #a8a3ff;
+  font-size: 10px;
+}
+
+li b {
+  color: var(--text);
+  font-weight: 700;
+}
+
+footer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+footer i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgb(21 213 160 / 9%);
+}

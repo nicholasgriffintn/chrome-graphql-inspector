@@ -13,6 +13,7 @@ export function parseGraphQLPayload(raw, url = "") {
     const parsed = safeJsonParse(body);
     if (parsed !== null) body = parsed;
     else if (/(^|&)(query|operationName|variables|extensions)=/.test(body)) body = Object.fromEntries(new URLSearchParams(body));
+    else if (isGraphQLDocument(body)) body = { query: body };
   }
   if (!body && url) {
     try {
@@ -80,33 +81,85 @@ function persistedName(extensions) {
 }
 
 export function inferOperationType(query = "", operationName = "") {
-  const stripped = query.replace(/#[^\n\r]*/g, "").trim();
-  const match = stripped.match(/^(query|mutation|subscription)\b/i);
-  if (match) return match[1].toLowerCase();
+  const stripped = searchableGraphQLDocument(query).trim();
   if (stripped.startsWith("{")) return "query";
+  const namedMatch = operationName && !/^Operation \d+$/.test(operationName)
+    ? stripped.match(new RegExp(`\\b(query|mutation|subscription)\\s+${escapeRegExp(operationName)}\\b`, "i"))
+    : null;
+  const match = namedMatch || stripped.match(/\b(query|mutation|subscription)\b/i);
+  if (match) return match[1].toLowerCase();
   const nameSuffix = String(operationName).match(/(query|mutation|subscription)$/i);
   if (nameSuffix) return nameSuffix[1].toLowerCase();
   return "unknown";
 }
 
 export function inferOperationTypeFromHeaders(headers = []) {
-  const header = headers.find(({ name, value }) => (
-    /(?:^|[-_.])operation[-_.]?type$/i.test(String(name))
-    && /^(query|mutation|subscription)$/i.test(String(value).trim())
-  ));
+  const header = headers.find(candidate => {
+    const { name, value } = candidate || {};
+    return (
+      /(?:^|[-_.])operation[-_.]?type$/i.test(String(name)) &&
+      /^(query|mutation|subscription)$/i.test(String(value).trim())
+    );
+  });
   return header ? String(header.value).trim().toLowerCase() : "unknown";
 }
 
 export function inferOperationName(query = "") {
-  const stripped = query.replace(/#[^\n\r]*/g, "");
+  const stripped = searchableGraphQLDocument(query);
   const match = stripped.match(/\b(?:query|mutation|subscription)\s+([_A-Za-z][_0-9A-Za-z]*)/);
   return match?.[1] || "";
 }
 
 export function looksGraphQL({ url = "", method = "", postData = "", responseText = "" }) {
   const body = typeof postData === "string" ? postData : JSON.stringify(postData || "");
-  if (/\b(query|mutation|subscription)\b|"?operationName"?|persistedQuery/.test(body)) return true;
-  return (method === "GET" && /[?&](query|operationName|extensions)=/.test(url)) || hasGraphQLResponseShape(responseText);
+  const parsedBody = safeJsonParse(body);
+  if (hasGraphQLPayloadShape(parsedBody) || (parsedBody === null && isGraphQLDocument(body))) return true;
+  if (/(^|&)(query|operationName|extensions)=/.test(body)) {
+    const params = Object.fromEntries(new URLSearchParams(body));
+    if (hasGraphQLPayloadShape(params)) return true;
+  }
+  if (String(method).toUpperCase() === "GET") {
+    try {
+      const params = Object.fromEntries(new URL(url, "https://example.invalid").searchParams);
+      if (hasGraphQLPayloadShape(params)) return true;
+    } catch {
+      // Ignore URLs that cannot contain a GraphQL query.
+    }
+  }
+  return hasGraphQLResponseShape(responseText);
+}
+
+function hasGraphQLPayloadShape(value) {
+  const entries = Array.isArray(value) ? value : [value];
+  return entries.some(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const query = typeof item.query === "string" ? decodeParam(item.query) : "";
+    if (query && isGraphQLDocument(query)) return true;
+    if (typeof item.operationName === "string" && item.operationName.trim()) return true;
+    const extensions = typeof item.extensions === "string"
+      ? safeJsonParse(decodeParam(item.extensions))
+      : item.extensions;
+    return Boolean(extensions?.persistedQuery);
+  });
+}
+
+function isGraphQLDocument(value) {
+  const document = searchableGraphQLDocument(value).trim();
+  if (!document.includes("{")) return false;
+  if (document.startsWith("{")) return true;
+  if (/^(query|mutation|subscription)\b/i.test(document)) return true;
+  return /^fragment\b/i.test(document) && /\b(query|mutation|subscription)\b/i.test(document);
+}
+
+function searchableGraphQLDocument(value) {
+  return String(value || "")
+    .replace(/"""[\s\S]*?"""/g, " ")
+    .replace(/"(?:\\.|[^"\\])*"/g, " ")
+    .replace(/#[^\n\r]*/g, " ");
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function hasGraphQLResponseShape(responseText) {

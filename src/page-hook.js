@@ -45,7 +45,12 @@
     window.fetch = function instrumentedFetch(input, init) {
       const requestId = crypto.randomUUID();
       const startedAt = Date.now();
-      const request = new Request(input, init);
+      let request;
+      try {
+        request = new Request(input, init);
+      } catch (error) {
+        return Promise.reject(error);
+      }
       const bodyPromise = request.clone().text().catch(() => "");
       bodyPromise.then(body => {
         if (shouldCaptureHttp(request.url, body)) {
@@ -104,7 +109,9 @@
   if (NativeXMLHttpRequest) {
     class InstrumentedXMLHttpRequest extends NativeXMLHttpRequest {
       open(method, url, ...rest) {
-        this.__graphqlInspector = { requestId: crypto.randomUUID(), method: method || "GET", url: String(url), requestHeaders: [] };
+        let endpoint = String(url);
+        try { endpoint = new URL(endpoint, location.href).href; } catch {}
+        this.__graphqlInspector = { requestId: crypto.randomUUID(), method: method || "GET", url: endpoint, requestHeaders: [] };
         return super.open(method, url, ...rest);
       }
 
@@ -150,7 +157,7 @@
       constructor(url, protocols) {
         super(url, protocols);
         const socketId = crypto.randomUUID();
-        const endpoint = String(url);
+        const endpoint = this.url || String(url);
         this.addEventListener("open", () => emit({ type: "ws-open", socketId, url: endpoint, at: Date.now() }));
         this.addEventListener("message", event => {
           if (typeof event.data === "string" && likelyGraphql(event.data)) emit({ type: "ws-frame", direction: "in", socketId, url: endpoint, data: event.data, at: Date.now() });
@@ -176,12 +183,17 @@
       constructor(url, config) {
         super(url, config);
         const sourceId = crypto.randomUUID();
-        const endpoint = String(url);
+        const endpoint = this.url || String(url);
+        const captureMessage = event => {
+          if (likelyGraphql(event.data) || /"data"\s*:|"errors"\s*:/.test(event.data)) {
+            emit({ type: "sse-message", sourceId, url: endpoint, event: event.type, data: event.data, at: Date.now() });
+          }
+        };
         this.addEventListener("open", () => emit({ type: "sse-open", sourceId, url: endpoint, at: Date.now() }));
-        this.addEventListener("message", event => {
-          if (likelyGraphql(event.data) || /"data"\s*:|"errors"\s*:/.test(event.data)) emit({ type: "sse-message", sourceId, url: endpoint, data: event.data, at: Date.now() });
-        });
-        this.addEventListener("error", () => emit({ type: "sse-error", sourceId, url: endpoint, at: Date.now() }));
+        this.addEventListener("message", captureMessage);
+        this.addEventListener("next", captureMessage);
+        this.addEventListener("complete", () => emit({ type: "sse-close", sourceId, url: endpoint, at: Date.now() }));
+        this.addEventListener("error", () => emit({ type: "sse-error", sourceId, url: endpoint, readyState: this.readyState, at: Date.now() }));
       }
     }
     window.EventSource = InstrumentedEventSource;

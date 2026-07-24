@@ -43,6 +43,14 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   }
 });
 
+chrome.tabs?.onRemoved?.addListener(tabId => {
+  panelPorts.delete(tabId);
+  httpEventsByTab.delete(tabId);
+  for (const [requestId, record] of httpRecords) {
+    if (record.tabId === tabId) httpRecords.delete(requestId);
+  }
+});
+
 try {
   chrome.webRequest.onBeforeRequest.addListener(
     details => {

@@ -26,8 +26,6 @@ Your GraphQL traffic stays on your device. The extension has no analytics, telem
 
 Captured traffic is kept temporarily in extension memory and is never written to extension storage. The only saved setting is **Preserve log**. GraphQLi sends a request only when you select **Send request**, directly from the inspected page to the endpoint shown.
 
-See the [privacy policy](PRIVACY.md) for details.
-
 ## Why permissions are needed
 
 - **Read data on all websites:** detect GraphQL traffic on any website you choose to inspect.

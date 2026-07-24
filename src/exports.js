@@ -1,3 +1,5 @@
+import { requestHeadersForReplay } from "./headers.js";
+
 function shellQuote(value) { return `'${String(value).replace(/'/g, `'"'"'`)}'`; }
 function jsString(value) { return JSON.stringify(String(value)); }
 
@@ -10,9 +12,14 @@ export function toCurl(item) {
 }
 
 export function toFetch(item) {
-  const headers = Object.fromEntries((item.requestHeaders || []).map(h => [h.name, h.value]));
-  const options = { method: item.method || "POST", headers };
-  if (item.requestBody) options.body = item.requestBody;
+  const method = String(item.method || "POST").toUpperCase();
+  const headers = requestHeadersForReplay(item.requestHeaders, {
+    includeJsonContentType: method !== "GET" && method !== "HEAD",
+  });
+  const options = { method: item.method || "POST", credentials: "include", headers };
+  if (item.requestBody && method !== "GET" && method !== "HEAD") {
+    options.body = item.requestBody;
+  }
   return `fetch(${jsString(item.url)}, ${JSON.stringify(options, null, 2)})\n  .then(response => response.json())\n  .then(console.log);`;
 }
 

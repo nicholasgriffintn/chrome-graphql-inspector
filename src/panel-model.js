@@ -3,14 +3,15 @@ import { hasGraphQLErrors, safeJsonParse } from "./graphql.js";
 const SEARCH_FIELD_LIMIT = 50000;
 
 export function isErrorItem(item) {
-  return Number(item?.status) >= 400 || hasGraphQLErrors(item?.response);
+  return Boolean(item?.error)
+    || isFailedHttpRequest(item)
+    || Number(item?.status) >= 400
+    || hasGraphQLErrors(item?.response);
 }
 
 export function getOperationCounts(items) {
   return items.reduce((counts, item) => {
-    const type = ["query", "mutation", "subscription"].includes(item.operationType)
-      ? item.operationType
-      : "unknown";
+    const type = operationTypeCategory(item);
     counts[type] += 1;
     if (isErrorItem(item)) counts.errors += 1;
     return counts;
@@ -20,7 +21,7 @@ export function getOperationCounts(items) {
 export function filterItems(items, { search = "", type = "all", errorsOnly = false } = {}) {
   const needle = search.trim().toLowerCase();
   return items.filter(item => {
-    if (type !== "all" && item.operationType !== type) return false;
+    if (type !== "all" && operationTypeCategory(item) !== type) return false;
     if (errorsOnly && !isErrorItem(item)) return false;
     if (!needle) return true;
     item.searchIndex ||= buildSearchIndex(item);
@@ -48,6 +49,7 @@ export function buildSearchIndex(item) {
     item.query,
     boundedJson(item.variables),
     boundedJson(item.extensions),
+    boundedJson(item.error),
     boundedText(item.responseRaw),
     boundedJson(item.response)
   ].filter(value => value !== undefined && value !== null && value !== "")
@@ -134,13 +136,64 @@ export function shortUrl(value) {
 }
 
 export function badgeType(item) {
-  return ["query", "mutation", "subscription"].includes(item.operationType)
+  return operationTypeCategory(item);
+}
+
+export function badgeLabel(item) {
+  const type = operationTypeCategory(item);
+  return type === "unknown" ? "other" : type;
+}
+
+function operationTypeCategory(item) {
+  return ["query", "mutation", "subscription"].includes(item?.operationType)
     ? item.operationType
     : "unknown";
 }
 
-export function badgeLabel(item) {
-  return ["query", "mutation", "subscription"].includes(item.operationType)
-    ? item.operationType
-    : "other";
+export function findEquivalentHttpCapture(items, event, tolerance = 1500) {
+  const exact = items.find(item => item.source === "http" && item.captureIds?.[event.source] === event.requestId);
+  if (exact) return exact;
+  const matches = items.filter(item => {
+    if (item.source !== "http" || item.batchIndex !== 0) return false;
+    const captureSources = item.captureSources || [item.captureSource].filter(Boolean);
+    if (captureSources.includes(event.source)) return false;
+    if (item.url !== event.url || String(item.method).toUpperCase() !== String(event.method).toUpperCase()) return false;
+    if (item.requestBody && event.requestBody && item.requestBody !== event.requestBody) return false;
+    return Math.abs(Number(item.startedAt) - Number(event.startedAt)) <= tolerance;
+  });
+  return matches.reduce((closest, item) => (
+    !closest
+    || Math.abs(Number(item.startedAt) - Number(event.startedAt))
+      < Math.abs(Number(closest.startedAt) - Number(event.startedAt))
+      ? item
+      : closest
+  ), undefined);
+}
+
+export function findClosestHttpRecord(records, event, tolerance = 10000) {
+  return Array.from(records).reduce((closest, record) => {
+    if (record.url !== event.url) return closest;
+    if (String(record.method).toUpperCase() !== String(event.method).toUpperCase()) return closest;
+    if (record.requestBody && event.requestBody && record.requestBody !== event.requestBody) return closest;
+    const distance = Math.abs(Number(record.startedAt) - Number(event.startedAt));
+    if (!Number.isFinite(distance) || distance >= tolerance) return closest;
+    if (!closest) return record;
+    const closestDistance = Math.abs(Number(closest.startedAt) - Number(event.startedAt));
+    return distance < closestDistance ? record : closest;
+  }, undefined);
+}
+
+export function operationStatusLabel(item) {
+  if (item?.error || isFailedHttpRequest(item)) return "failed";
+  return String(item?.status ?? "pending");
+}
+
+export function isReplayableItem(item) {
+  return item?.source === "http"
+    && ["GET", "POST"].includes(String(item.method).toUpperCase())
+    && Boolean(String(item.query || "").trim());
+}
+
+function isFailedHttpRequest(item) {
+  return item?.source === "http" && item.phase !== "start" && Number(item.status) === 0;
 }
