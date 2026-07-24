@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "package": "zip -r graphql-inspector.zip manifest.json src icons README.md PRIVACY.md LICENSE package.json"
+    "package": "zip -r graphql-inspector.zip manifest.json src icons README.md LICENSE package.json"
   },
   "engines": {
     "node": ">=20"

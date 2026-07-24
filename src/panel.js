@@ -328,19 +328,30 @@ function render() {
         <span>${escapeHtml(formatDuration(item.duration))}</span>
         <span class="request-time" data-started-at="${escapeHtml(String(item.startedAt))}">${escapeHtml(formatRelativeTime(item.startedAt))}</span>
       </span>`;
-    div.onclick = () => { state.selectedId = item.id; render(); };
+    div.onclick = () => selectRequest(item.id);
     div.onkeydown = event => handleRequestKeydown(event, items, item.id);
     return div;
   }));
   renderDetail();
 }
 
+function selectRequest(itemId) {
+  state.selectedId = itemId;
+  for (const request of els.requests.children) {
+    const selected = request.dataset.requestId === itemId;
+    request.classList.toggle("selected", selected);
+    request.setAttribute("aria-selected", String(selected));
+  }
+  renderDetail();
+}
+
 function renderEmptyState() {
   if (els.empty.hidden) return;
-  const icon = document.createElement("span");
-  icon.className = "empty-mark";
+  const icon = document.createElement("img");
+  icon.className = "empty-icon";
+  icon.src = "../icons/icon48.png";
+  icon.alt = "";
   icon.setAttribute("aria-hidden", "true");
-  icon.textContent = "GQ";
   const title = document.createElement("strong");
   const message = document.createElement("span");
   const { background, network, har } = state.diagnostics;
@@ -412,8 +423,7 @@ function renderTimingSummary(item) {
 function handleRequestKeydown(event, items, itemId) {
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();
-    state.selectedId = itemId;
-    render();
+    selectRequest(itemId);
     focusSelectedRequest();
     return;
   }
@@ -425,8 +435,7 @@ function handleRequestKeydown(event, items, itemId) {
     : event.key === "End"
       ? items.length - 1
       : Math.min(items.length - 1, Math.max(0, currentIndex + (event.key === "ArrowDown" ? 1 : -1)));
-  state.selectedId = items[nextIndex]?.id ?? itemId;
-  render();
+  selectRequest(items[nextIndex]?.id ?? itemId);
   focusSelectedRequest();
 }
 

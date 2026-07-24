@@ -4,12 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GraphQL Inspector</title>
+  <link rel="icon" href="../icons/icon32.png">
   <link rel="stylesheet" href="panel.css">
 </head>
 <body>
   <header class="app-header">
     <div class="brand" aria-label="GraphQL Inspector">
-      <span class="brand-mark" aria-hidden="true">GQ</span>
+      <img class="brand-icon" src="../icons/icon32.png" alt="" aria-hidden="true">
       <strong>GraphQL Inspector</strong>
     </div>
 
@@ -71,7 +72,7 @@
 
       <div class="request-list-wrap">
         <div id="empty" class="empty">
-          <span class="empty-mark" aria-hidden="true">GQ</span>
+          <img class="empty-icon" src="../icons/icon48.png" alt="" aria-hidden="true">
           <strong>No GraphQL traffic yet</strong>
           <span>Run an operation with DevTools open.</span>
         </div>
@@ -79,29 +80,41 @@
       </div>
 
       <footer class="operation-summary" aria-label="Capture summary">
-        <button type="button" data-summary-filter="query" aria-pressed="false">
-          <i class="query-dot" aria-hidden="true"></i>
-          <span><strong id="queryCount">0</strong> queries</span>
+        <button type="button" data-summary-filter="query" aria-pressed="false" aria-label="Filter queries">
+          <span class="summary-value">
+            <strong id="queryCount">0</strong>
+            <i class="query-dot" aria-hidden="true"></i>
+          </span>
+          <span class="summary-label">Queries</span>
         </button>
-        <button type="button" data-summary-filter="mutation" aria-pressed="false">
-          <i class="mutation-dot" aria-hidden="true"></i>
-          <span><strong id="mutationCount">0</strong> mutations</span>
+        <button type="button" data-summary-filter="mutation" aria-pressed="false" aria-label="Filter mutations">
+          <span class="summary-value">
+            <strong id="mutationCount">0</strong>
+            <i class="mutation-dot" aria-hidden="true"></i>
+          </span>
+          <span class="summary-label">Mutations</span>
         </button>
-        <button type="button" data-summary-filter="subscription" aria-pressed="false">
-          <i class="subscription-dot" aria-hidden="true"></i>
-          <span><strong id="subscriptionCount">0</strong> subscriptions</span>
+        <button type="button" data-summary-filter="subscription" aria-pressed="false" aria-label="Filter subscriptions">
+          <span class="summary-value">
+            <strong id="subscriptionCount">0</strong>
+            <i class="subscription-dot" aria-hidden="true"></i>
+          </span>
+          <span class="summary-label">Subs</span>
         </button>
-        <label class="error-summary">
+        <label class="error-summary" aria-label="Show errors only">
           <input id="errorsOnly" class="visually-hidden" type="checkbox">
-          <i class="error-dot" aria-hidden="true"></i>
-          <span><strong id="errorCount">0</strong> errors</span>
+          <span class="summary-value">
+            <strong id="errorCount">0</strong>
+            <i class="error-dot" aria-hidden="true"></i>
+          </span>
+          <span class="summary-label">Errors</span>
         </label>
       </footer>
     </aside>
 
     <section class="detail-pane" aria-label="Operation details">
       <div id="noSelection" class="empty detail-empty">
-        <span class="empty-mark" aria-hidden="true">GQ</span>
+        <img class="empty-icon" src="../icons/icon48.png" alt="" aria-hidden="true">
         <strong>Select an operation</strong>
         <span>Its response, request and timing details will appear here.</span>
       </div>
@@ -282,7 +295,7 @@
   <details class="help-menu">
     <summary aria-label="Help" title="Help">?</summary>
     <div>
-      <strong>GraphQL Inspector</strong>
+      <span class="help-title"><img src="../icons/icon16.png" alt="" aria-hidden="true"><strong>GraphQL Inspector</strong></span>
       <p>Reload the inspected page if traffic does not appear. Use <kbd>↑</kbd> and <kbd>↓</kbd> to move through operations.</p>
       <p>GraphQLi sends requests from the inspected page, using its cookies and browser security rules.</p>
     </div>

@@ -138,7 +138,8 @@ test("reset filters reveals captured GraphQL requests", async () => {
 
   assert.equal(document.getElementById("requests").children.length, 0);
   assert.equal(document.getElementById("requestCount").textContent, "0/2");
-  assert.match(document.getElementById("empty").textContent, /2 GraphQL requests captured/);
+  assert.match(document.getElementById("empty").textContent, /No matching operations/);
+  assert.match(document.getElementById("empty").textContent, /2 captured/);
 
   document.getElementById("resetFilters").onclick();
 
