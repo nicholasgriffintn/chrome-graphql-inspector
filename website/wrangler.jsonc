@@ -5,7 +5,7 @@
   "preview_urls": false,
   "routes": [
     {
-      "pattern": "graphi-inspector.pashi.app",
+      "pattern": "graphql-inspector.pashi.app",
       "custom_domain": true
     }
   ],
