@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { inferOperationName, inferOperationType, looksGraphQL, parseGraphQLPayload, parseMultipart, hasGraphQLErrors } from "../src/graphql.js";
+import { formatGraphQLQuery, inferOperationName, inferOperationType, inferOperationTypeFromHeaders, looksGraphQL, parseGraphQLPayload, parseMultipart, hasGraphQLErrors } from "../src/graphql.js";
 
 test("infers operation", () => {
   assert.equal(inferOperationType("mutation SaveThing { saveThing }"), "mutation");
@@ -16,6 +16,30 @@ test("splits batches", () => {
 test("handles persisted queries", () => {
   const result = parseGraphQLPayload(JSON.stringify({ operationName: "GetUser", extensions: { persistedQuery: { sha256Hash: "abcdef012345" } } }))[0];
   assert.equal(result.persisted, true); assert.equal(result.operationName, "GetUser");
+});
+
+test("infers persisted operation types from conventional operation-name suffixes", () => {
+  const persisted = extensions => ({ persistedQuery: { version: 1, sha256Hash: "abcdef012345" }, ...extensions });
+  const cases = [
+    ["MiniModalQuery", "query"],
+    ["UpdateProfileMutation", "mutation"],
+    ["PlaybackChangedSubscription", "subscription"],
+    ["DetailModal", "unknown"]
+  ];
+
+  for (const [operationName, operationType] of cases) {
+    const result = parseGraphQLPayload(JSON.stringify({ operationName, extensions: persisted() }))[0];
+    assert.equal(result.operationType, operationType, operationName);
+  }
+});
+
+test("uses explicit operation-type headers when a persisted name is ambiguous", () => {
+  assert.equal(inferOperationTypeFromHeaders([
+    { name: "x-graphql-operation-type", value: "Mutation" }
+  ]), "mutation");
+  assert.equal(inferOperationTypeFromHeaders([
+    { name: "x-client-name", value: "example" }
+  ]), "unknown");
 });
 
 test("parses url encoded queries", () => {
@@ -93,3 +117,9 @@ test("parses multipart", () => {
 });
 
 test("detects errors", () => { assert.equal(hasGraphQLErrors({ errors: [{ message: "bad" }] }), true); });
+
+test("formats GraphQL operations without altering string values", () => {
+  const formatted = formatGraphQLQuery('query Viewer { viewer(label: "A { label }") { id,name } }');
+  assert.match(formatted, /viewer\(label: "A \{ label \}"\) \{/);
+  assert.match(formatted, /\n\s+id, name\n/);
+});

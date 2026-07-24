@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
+
+const panelHtml = readFileSync(new URL("../src/panel.html", import.meta.url), "utf8");
 
 function sampleHarEntries() {
   const entry = (operationName, query) => ({
@@ -26,48 +29,7 @@ function sampleHarEntries() {
 
 function setupPanelDom({ harEntries = [] } = {}) {
   const evalCalls = [];
-  const dom = new JSDOM(`<!doctype html>
-    <button id="modeInspector" class="active"></button>
-    <button id="modeGraphiql"></button>
-    <main id="inspectorView"></main>
-    <main id="graphiqlView" hidden></main>
-    <input id="search">
-    <select id="typeFilter"><option value="all" selected>All</option></select>
-    <label><input id="errorsOnly" type="checkbox"> Errors</label>
-    <label><input id="preserve" type="checkbox"> Preserve</label>
-    <span id="requestCount"></span>
-    <button id="resetFilters"></button>
-    <button id="clear"></button>
-    <button id="exportAll"></button>
-    <div id="requests"></div>
-    <div id="empty"></div>
-    <div id="noSelection"></div>
-    <div id="detail" hidden></div>
-    <div id="detailName"></div>
-    <div id="detailMeta"></div>
-    <pre id="queryView"></pre>
-    <pre id="variablesView"></pre>
-    <div id="responseView"></div>
-    <pre id="responseRawView"></pre>
-    <pre id="headersView"></pre>
-    <pre id="timelineView"></pre>
-    <button id="copyCurl"></button>
-    <button id="copyFetch"></button>
-    <button id="copyJson"></button>
-    <div id="tabs"></div>
-    <input id="graphiqlEndpoint">
-    <select id="graphiqlMethod"><option value="POST" selected>POST</option><option value="GET">GET</option></select>
-    <button id="graphiqlUseSelected"></button>
-    <button id="graphiqlSend"></button>
-    <input id="graphiqlOperationName">
-    <textarea id="graphiqlQuery"></textarea>
-    <textarea id="graphiqlVariables"></textarea>
-    <textarea id="graphiqlHeaders"></textarea>
-    <span id="graphiqlStatus"></span>
-    <div id="graphiqlTabs"></div>
-    <div id="graphiqlResponse"></div>
-    <pre id="graphiqlResponseRaw"></pre>
-    <pre id="graphiqlResponseHeaders"></pre>`, { url: "https://example.test" });
+  const dom = new JSDOM(panelHtml, { url: "https://example.test" });
 
   const listeners = [];
   globalThis.document = dom.window.document;
@@ -134,6 +96,9 @@ test("renders GraphQL requests from HAR backfill", async () => {
   assert.equal(document.getElementById("empty").hidden, true);
   assert.equal(document.getElementById("noSelection").hidden, true);
   assert.equal(document.getElementById("requestCount").textContent, "2/2");
+  assert.equal(document.getElementById("captureNumber").textContent, "2");
+  assert.equal(document.getElementById("queryCount").textContent, "2");
+  assert.equal(document.getElementById("mutationCount").textContent, "0");
   assert.match(document.getElementById("requests").textContent, /articles/);
   assert.match(document.getElementById("requests").textContent, /getStatus/);
   assert.equal(document.querySelectorAll(".badge.query").length, 2);
@@ -143,6 +108,24 @@ test("renders GraphQL requests from HAR backfill", async () => {
   assert.ok(document.getElementById("responseView").querySelector(".json-key"));
   assert.ok(document.getElementById("responseView").querySelector("details"));
   assert.ok(document.getElementById("responseRawView").querySelector(".json-key"));
+});
+
+test("supports segmented filters and keyboard request navigation", async () => {
+  setupPanelDom({ harEntries: sampleHarEntries() });
+
+  await import(`../src/panel.js?navigation=${Date.now()}`);
+
+  const queryFilter = document.querySelector('[data-type-filter="query"]');
+  queryFilter.click();
+  assert.equal(document.getElementById("typeFilter").value, "query");
+  assert.equal(queryFilter.getAttribute("aria-pressed"), "true");
+
+  const selected = document.querySelector(".request.selected");
+  selected.dispatchEvent(new selected.ownerDocument.defaultView.KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+  await Promise.resolve();
+
+  assert.equal(document.querySelector(".request.selected"), document.querySelector(".request"));
+  assert.equal(document.querySelector(".request.selected").getAttribute("aria-selected"), "true");
 });
 
 test("reset filters reveals captured GraphQL requests", async () => {
@@ -169,8 +152,12 @@ test("GraphQLi sends a page-context request and renders the response", async () 
   await import(`../src/panel.js?graphiql-smoke=${Date.now()}`);
 
   document.getElementById("modeGraphiql").onclick();
-  assert.equal(document.getElementById("errorsOnly").closest("label").hidden, true);
-  assert.equal(document.getElementById("preserve").closest("label").hidden, true);
+  assert.equal(document.getElementById("inspectorView").hidden, true);
+  assert.equal(document.getElementById("inspectorActions").hidden, true);
+  assert.equal(document.getElementById("modeGraphiql").getAttribute("aria-selected"), "true");
+  document.querySelector('[data-graphiql-input-tab="headers"]').click();
+  assert.equal(document.getElementById("graphiql-input-variables").hidden, true);
+  assert.equal(document.getElementById("graphiql-input-headers").hidden, false);
   document.getElementById("graphiqlEndpoint").value = "https://example.test/graphql";
   document.getElementById("graphiqlQuery").value = "query Hello { hello }";
   document.getElementById("graphiqlVariables").value = "{}";
@@ -193,6 +180,7 @@ test("GraphQLi sends a page-context request and renders the response", async () 
     duration: 12
   });
   assert.match(document.getElementById("graphiqlStatus").textContent, /200 OK/);
+  assert.equal(document.getElementById("graphiqlCopyResponse").disabled, false);
   assert.match(document.getElementById("graphiqlResponseRaw").textContent, /hello/);
   assert.ok(document.getElementById("graphiqlResponse").querySelector("details"));
   assert.ok(document.getElementById("graphiqlResponseRaw").querySelector(".json-key"));

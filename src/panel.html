@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,107 +7,288 @@
   <link rel="stylesheet" href="panel.css">
 </head>
 <body>
-  <header class="toolbar">
-    <div class="mode-tabs" role="tablist" aria-label="Panel mode">
-      <button id="modeInspector" class="active" type="button">Inspector</button>
-      <button id="modeGraphiql" type="button">GraphQLi</button>
+  <header class="app-header">
+    <div class="brand" aria-label="GraphQL Inspector">
+      <span class="brand-mark" aria-hidden="true">GQ</span>
+      <strong>GraphQL Inspector</strong>
     </div>
-    <input id="search" type="search" placeholder="Search operation, URL, variables, response…" aria-label="Search requests">
-    <select id="typeFilter" aria-label="Operation type">
-      <option value="all">All operations</option>
-      <option value="query">Queries</option>
-      <option value="mutation">Mutations</option>
-      <option value="subscription">Subscriptions</option>
-      <option value="unknown">Unknown</option>
-    </select>
-    <label><input id="errorsOnly" type="checkbox"> Errors</label>
-    <label><input id="preserve" type="checkbox"> Preserve</label>
-    <span id="requestCount" class="muted count"></span>
-    <button id="resetFilters" title="Reset search and filters">Reset filters</button>
-    <button id="clear" title="Clear captured requests">Clear</button>
-    <button id="exportAll" title="Export visible requests as JSON">Export</button>
+
+    <div class="mode-tabs" role="tablist" aria-label="Panel mode">
+      <button id="modeInspector" class="active" type="button" role="tab" aria-selected="true">Inspector</button>
+      <button id="modeGraphiql" type="button" role="tab" aria-selected="false">GraphQLi</button>
+    </div>
+
+    <div class="header-actions">
+      <div id="captureTotal" class="capture-total" aria-live="polite">
+        <span id="captureNumber">0</span>
+        <span class="capture-word">captured</span>
+        <i aria-hidden="true"></i>
+      </div>
+      <div id="inspectorActions" class="inspector-actions">
+        <label class="preserve-control" title="Keep requests during page navigation">
+          <input id="preserve" type="checkbox">
+          <span>Preserve log</span>
+        </label>
+        <button id="exportAll" class="icon-button" type="button" title="Export visible requests as JSON" aria-label="Export visible requests">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M2.5 11.5v2h11v-2"/></svg>
+        </button>
+      </div>
+    </div>
   </header>
 
-  <main id="inspectorView" class="layout">
-    <section class="request-pane">
-      <div class="request-header row">
-        <span>Status</span><span>Operation</span><span>Type</span><span>Duration</span><span>Endpoint</span>
-      </div>
-      <div id="empty" class="empty">Run a GraphQL operation with DevTools open.</div>
-      <div id="requests" role="listbox" aria-label="GraphQL requests"></div>
-    </section>
-
-    <section class="detail-pane">
-      <div id="noSelection" class="empty">Select a request.</div>
-      <div id="detail" hidden>
-        <div class="detail-title">
-          <div><strong id="detailName"></strong><div id="detailMeta" class="muted"></div></div>
-          <div class="detail-actions">
-            <button id="copyCurl">Copy cURL</button>
-            <button id="copyFetch">Copy fetch</button>
-            <button id="copyJson">Copy JSON</button>
-          </div>
+  <main id="inspectorView" class="inspector-layout">
+    <aside class="request-pane" aria-label="Captured operations">
+      <div class="request-tools">
+        <div class="search-field">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg>
+          <input id="search" type="search" placeholder="Filter operations…" aria-label="Search captured requests">
         </div>
-        <nav id="tabs" class="tabs">
-          <button data-tab="query" class="active">Query</button>
-          <button data-tab="variables">Variables</button>
-          <button data-tab="response">Response</button>
-          <button data-tab="responseRaw">Response (Raw)</button>
-          <button data-tab="headers">Headers</button>
-          <button data-tab="timeline">Timeline</button>
+
+        <div class="filter-row">
+          <div id="typeSegments" class="type-segments" role="group" aria-label="Filter by operation type">
+            <button class="active" type="button" data-type-filter="all" aria-pressed="true">All</button>
+            <button type="button" data-type-filter="query" aria-pressed="false">Query</button>
+            <button type="button" data-type-filter="mutation" aria-pressed="false">Mutation</button>
+            <button type="button" data-type-filter="subscription" aria-pressed="false">Sub</button>
+            <button type="button" data-type-filter="unknown" aria-pressed="false">Other</button>
+          </div>
+          <select id="typeFilter" class="visually-hidden" aria-label="Operation type">
+            <option value="all">All operations</option>
+            <option value="query">Queries</option>
+            <option value="mutation">Mutations</option>
+            <option value="subscription">Subscriptions</option>
+            <option value="unknown">Other</option>
+          </select>
+          <span id="requestCount" class="request-count">0/0</span>
+          <button id="resetFilters" class="icon-button" type="button" title="Reset search and filters" aria-label="Reset filters">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M12.7 3.3A6 6 0 1 0 14 9M12.7 3.3V7m0-3.7H9"/></svg>
+          </button>
+          <button id="clear" class="icon-button danger-button" type="button" title="Clear captured requests" aria-label="Clear captured requests">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h10M6 2.5h4M5 6.5v6m3-6v6m3-6v6M4 4.5l.5 9h7l.5-9"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="request-list-wrap">
+        <div id="empty" class="empty">
+          <span class="empty-mark" aria-hidden="true">GQ</span>
+          <strong>No GraphQL traffic yet</strong>
+          <span>Run an operation with DevTools open.</span>
+        </div>
+        <div id="requests" class="request-list" role="listbox" aria-label="GraphQL requests"></div>
+      </div>
+
+      <footer class="operation-summary" aria-label="Capture summary">
+        <button type="button" data-summary-filter="query" aria-pressed="false">
+          <i class="query-dot" aria-hidden="true"></i>
+          <span><strong id="queryCount">0</strong> queries</span>
+        </button>
+        <button type="button" data-summary-filter="mutation" aria-pressed="false">
+          <i class="mutation-dot" aria-hidden="true"></i>
+          <span><strong id="mutationCount">0</strong> mutations</span>
+        </button>
+        <button type="button" data-summary-filter="subscription" aria-pressed="false">
+          <i class="subscription-dot" aria-hidden="true"></i>
+          <span><strong id="subscriptionCount">0</strong> subscriptions</span>
+        </button>
+        <label class="error-summary">
+          <input id="errorsOnly" class="visually-hidden" type="checkbox">
+          <i class="error-dot" aria-hidden="true"></i>
+          <span><strong id="errorCount">0</strong> errors</span>
+        </label>
+      </footer>
+    </aside>
+
+    <section class="detail-pane" aria-label="Operation details">
+      <div id="noSelection" class="empty detail-empty">
+        <span class="empty-mark" aria-hidden="true">GQ</span>
+        <strong>Select an operation</strong>
+        <span>Its response, request and timing details will appear here.</span>
+      </div>
+
+      <div id="detail" hidden>
+        <header class="detail-title">
+          <div class="detail-identity">
+            <span id="detailType" class="badge unknown">OTHER</span>
+            <div>
+              <strong id="detailName"></strong>
+              <div class="detail-subline">
+                <span id="detailEndpoint" class="detail-endpoint"></span>
+                <span id="detailPersisted" class="persisted-note" hidden>persisted</span>
+              </div>
+              <div id="detailMeta" class="visually-hidden"></div>
+            </div>
+          </div>
+          <div class="detail-overview">
+            <span id="detailStatus" class="detail-status">Pending</span>
+            <span id="detailDuration" class="detail-duration">Live</span>
+            <details class="action-menu">
+              <summary class="icon-button" title="Operation actions" aria-label="Operation actions">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="13" cy="8" r="1"/></svg>
+              </summary>
+              <div class="action-menu-popover">
+                <button id="openGraphiql" type="button">Open in GraphQLi</button>
+                <button id="copyCurl" type="button">Copy as cURL</button>
+                <button id="copyFetch" type="button">Copy as fetch</button>
+                <button id="copyJson" type="button">Copy operation JSON</button>
+              </div>
+            </details>
+          </div>
+        </header>
+
+        <nav id="tabs" class="tabs" role="tablist" aria-label="Operation detail">
+          <button data-tab="response" class="active" type="button" role="tab" aria-selected="true">Response</button>
+          <button data-tab="request" type="button" role="tab" aria-selected="false">Request</button>
+          <button data-tab="headers" type="button" role="tab" aria-selected="false">Headers</button>
+          <button data-tab="timeline" type="button" role="tab" aria-selected="false">Timings</button>
         </nav>
-        <section id="tab-query" class="tab-panel"><pre id="queryView"></pre></section>
-        <section id="tab-variables" class="tab-panel" hidden><pre id="variablesView"></pre></section>
-        <section id="tab-response" class="tab-panel" hidden><div id="responseView" class="object-view"></div></section>
-        <section id="tab-responseRaw" class="tab-panel" hidden><pre id="responseRawView"></pre></section>
-        <section id="tab-headers" class="tab-panel" hidden><pre id="headersView"></pre></section>
-        <section id="tab-timeline" class="tab-panel" hidden><pre id="timelineView"></pre></section>
+
+        <section id="tab-response" class="tab-panel response-panel">
+          <div class="response-toolbar">
+            <span id="responseState">Waiting for response</span>
+            <div class="response-actions">
+              <div id="responseViewToggle" class="view-toggle" role="group" aria-label="Response view">
+                <button class="active" type="button" data-response-view="tree" aria-pressed="true">Tree</button>
+                <button type="button" data-response-view="raw" aria-pressed="false">Raw</button>
+              </div>
+              <button id="copyResponse" class="copy-button" type="button">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1"/><path d="M3 10H2.5V2.5h7V3"/></svg>
+                Copy
+              </button>
+            </div>
+          </div>
+          <div id="responseView" class="object-view"></div>
+          <pre id="responseRawView" hidden></pre>
+        </section>
+
+        <section id="tab-request" class="tab-panel request-detail-panel" hidden>
+          <section class="code-section">
+            <h2>Query</h2>
+            <pre id="queryView"></pre>
+          </section>
+          <section class="code-section">
+            <h2>Variables</h2>
+            <pre id="variablesView"></pre>
+          </section>
+          <section id="extensionsSection" class="code-section">
+            <h2>Extensions</h2>
+            <pre id="extensionsView"></pre>
+          </section>
+        </section>
+
+        <section id="tab-headers" class="tab-panel" hidden>
+          <pre id="headersView"></pre>
+        </section>
+
+        <section id="tab-timeline" class="tab-panel timing-panel" hidden>
+          <div id="timingSummary" class="timing-summary"></div>
+          <pre id="timelineView"></pre>
+        </section>
       </div>
     </section>
   </main>
 
   <main id="graphiqlView" class="graphiql-layout" hidden>
     <section class="graphiql-editor">
-      <div class="graphiql-bar">
-        <input id="graphiqlEndpoint" type="url" placeholder="Endpoint URL" aria-label="GraphQL endpoint">
-        <select id="graphiqlMethod" aria-label="GraphQL method">
-          <option value="POST">POST</option>
-          <option value="GET">GET</option>
-        </select>
-        <button id="graphiqlUseSelected" type="button">Use selected</button>
-        <button id="graphiqlSend" type="button">Send</button>
+      <header class="composer-title">
+        <div>
+          <span class="eyebrow">Request composer</span>
+          <strong>Run a GraphQL operation</strong>
+        </div>
+        <span class="page-context"><i aria-hidden="true"></i>Page context</span>
+      </header>
+
+      <div class="composer-connection">
+        <label class="composer-field endpoint-field">
+          <span>Endpoint</span>
+          <input id="graphiqlEndpoint" type="url" placeholder="https://api.example.test/graphql" aria-label="GraphQL endpoint">
+        </label>
+        <label class="composer-field method-field">
+          <span>Method</span>
+          <select id="graphiqlMethod" aria-label="GraphQL method">
+            <option value="POST">POST</option>
+            <option value="GET">GET</option>
+          </select>
+        </label>
+        <button id="graphiqlUseSelected" class="secondary-button" type="button">Use selected</button>
       </div>
-      <input id="graphiqlOperationName" class="graphiql-operation" type="text" placeholder="Operation name (optional)" aria-label="Operation name">
-      <div class="graphiql-grid">
-        <label>
-          <span>Query</span>
-          <textarea id="graphiqlQuery" spellcheck="false" placeholder="query Example { viewer { id } }"></textarea>
-        </label>
-        <label>
-          <span>Variables</span>
-          <textarea id="graphiqlVariables" spellcheck="false" placeholder="{&#10;  &quot;id&quot;: &quot;123&quot;&#10;}"></textarea>
-        </label>
-        <label>
-          <span>Headers</span>
-          <textarea id="graphiqlHeaders" spellcheck="false" placeholder="{&#10;  &quot;content-type&quot;: &quot;application/json&quot;&#10;}"></textarea>
-        </label>
-      </div>
+
+      <label class="composer-field operation-name-field">
+        <span>Operation name <em>optional</em></span>
+        <input id="graphiqlOperationName" type="text" placeholder="ExampleQuery" aria-label="Operation name">
+      </label>
+
+      <section class="query-editor">
+        <header>
+          <span>Operation document</span>
+          <span>GraphQL</span>
+        </header>
+        <textarea id="graphiqlQuery" spellcheck="false" aria-label="GraphQL operation" placeholder="query Example {&#10;  viewer {&#10;    id&#10;  }&#10;}"></textarea>
+      </section>
+
+      <section class="request-options">
+        <nav id="graphiqlInputTabs" class="input-tabs" role="tablist" aria-label="Request options">
+          <button class="active" type="button" data-graphiql-input-tab="variables" role="tab" aria-selected="true">Variables</button>
+          <button type="button" data-graphiql-input-tab="headers" role="tab" aria-selected="false">Headers</button>
+        </nav>
+        <div id="graphiql-input-variables" class="input-tab-panel">
+          <textarea id="graphiqlVariables" spellcheck="false" aria-label="GraphQL variables" placeholder="{&#10;  &quot;id&quot;: &quot;123&quot;&#10;}"></textarea>
+        </div>
+        <div id="graphiql-input-headers" class="input-tab-panel" hidden>
+          <textarea id="graphiqlHeaders" spellcheck="false" aria-label="Request headers" placeholder="{&#10;  &quot;content-type&quot;: &quot;application/json&quot;&#10;}"></textarea>
+        </div>
+      </section>
+
+      <footer class="composer-footer">
+        <span>Uses the inspected page's cookies and browser security rules.</span>
+        <button id="graphiqlSend" class="primary-button" type="button">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 2 11 6-11 6 2-6-2-6Z"/><path d="M5 8h8"/></svg>
+          <span id="graphiqlSendLabel">Send request</span>
+        </button>
+      </footer>
     </section>
+
     <section class="graphiql-result">
-      <div class="graphiql-result-title">
-        <strong>Result</strong>
-        <span id="graphiqlStatus" class="muted"></span>
+      <header class="graphiql-result-title">
+        <div>
+          <span class="eyebrow">Latest result</span>
+          <strong>Response</strong>
+        </div>
+        <span id="graphiqlStatus">Ready</span>
+      </header>
+      <div class="graphiql-result-tabs">
+        <nav id="graphiqlTabs" class="tabs" role="tablist" aria-label="GraphQLi response">
+          <button data-graphiql-tab="object" class="active" type="button" role="tab" aria-selected="true">Response</button>
+          <button data-graphiql-tab="raw" type="button" role="tab" aria-selected="false">Raw</button>
+          <button data-graphiql-tab="headers" type="button" role="tab" aria-selected="false">Headers</button>
+        </nav>
+        <button id="graphiqlCopyResponse" class="copy-button" type="button" disabled>
+          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1"/><path d="M3 10H2.5V2.5h7V3"/></svg>
+          Copy
+        </button>
       </div>
-      <nav id="graphiqlTabs" class="tabs">
-        <button data-graphiql-tab="object" class="active">Response</button>
-        <button data-graphiql-tab="raw">Response (Raw)</button>
-        <button data-graphiql-tab="headers">Headers</button>
-      </nav>
-      <section id="graphiql-tab-object" class="tab-panel"><div id="graphiqlResponse" class="object-view"></div></section>
-      <section id="graphiql-tab-raw" class="tab-panel" hidden><pre id="graphiqlResponseRaw"></pre></section>
-      <section id="graphiql-tab-headers" class="tab-panel" hidden><pre id="graphiqlResponseHeaders"></pre></section>
+      <section id="graphiql-tab-object" class="tab-panel">
+        <div id="graphiqlResponse" class="object-view graphiql-response-empty">Send a request to inspect its response.</div>
+      </section>
+      <section id="graphiql-tab-raw" class="tab-panel" hidden>
+        <pre id="graphiqlResponseRaw"></pre>
+      </section>
+      <section id="graphiql-tab-headers" class="tab-panel" hidden>
+        <pre id="graphiqlResponseHeaders"></pre>
+      </section>
     </section>
   </main>
+
+  <details class="help-menu">
+    <summary aria-label="Help" title="Help">?</summary>
+    <div>
+      <strong>GraphQL Inspector</strong>
+      <p>Reload the inspected page if traffic does not appear. Use <kbd>↑</kbd> and <kbd>↓</kbd> to move through operations.</p>
+      <p>GraphQLi sends requests from the inspected page, using its cookies and browser security rules.</p>
+    </div>
+  </details>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <script type="module" src="panel.js"></script>
 </body>
 </html>

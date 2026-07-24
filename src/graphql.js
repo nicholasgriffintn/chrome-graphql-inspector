@@ -34,7 +34,7 @@ function normalizePayload(item, index) {
   return {
     query,
     operationName,
-    operationType: inferOperationType(query),
+    operationType: inferOperationType(query, operationName),
     variables: variables ?? {},
     extensions: extensions ?? {},
     persisted: Boolean(extensions?.persistedQuery)
@@ -79,12 +79,22 @@ function persistedName(extensions) {
   return hash ? `Persisted ${hash.slice(0, 8)}` : "";
 }
 
-export function inferOperationType(query = "") {
+export function inferOperationType(query = "", operationName = "") {
   const stripped = query.replace(/#[^\n\r]*/g, "").trim();
   const match = stripped.match(/^(query|mutation|subscription)\b/i);
   if (match) return match[1].toLowerCase();
   if (stripped.startsWith("{")) return "query";
+  const nameSuffix = String(operationName).match(/(query|mutation|subscription)$/i);
+  if (nameSuffix) return nameSuffix[1].toLowerCase();
   return "unknown";
+}
+
+export function inferOperationTypeFromHeaders(headers = []) {
+  const header = headers.find(({ name, value }) => (
+    /(?:^|[-_.])operation[-_.]?type$/i.test(String(name))
+    && /^(query|mutation|subscription)$/i.test(String(value).trim())
+  ));
+  return header ? String(header.value).trim().toLowerCase() : "unknown";
 }
 
 export function inferOperationName(query = "") {
@@ -128,6 +138,64 @@ export function formatJson(value) {
     return value;
   }
   return JSON.stringify(value, null, 2);
+}
+
+export function formatGraphQLQuery(query) {
+  const text = String(query || "").trim();
+  if (!text) return "";
+  let formatted = "";
+  let indent = 0;
+  let inString = false;
+  let quote = "";
+  let escaping = false;
+  const writeIndent = () => { formatted += "  ".repeat(Math.max(indent, 0)); };
+  const trimLineEnd = () => { formatted = formatted.replace(/[ \t]+$/g, ""); };
+  const newline = () => {
+    trimLineEnd();
+    if (!formatted.endsWith("\n")) formatted += "\n";
+    writeIndent();
+  };
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      formatted += character;
+      if (escaping) escaping = false;
+      else if (character === "\\") escaping = true;
+      else if (character === quote) inString = false;
+      continue;
+    }
+    if (character === "\"" || character === "'") {
+      inString = true;
+      quote = character;
+      formatted += character;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      if (!/[\s({[]$/.test(formatted)) formatted += " ";
+      continue;
+    }
+    if (character === "{") {
+      trimLineEnd();
+      formatted += " {";
+      indent += 1;
+      newline();
+      continue;
+    }
+    if (character === "}") {
+      indent -= 1;
+      newline();
+      formatted += "}";
+      if (text.slice(index + 1).trim()) newline();
+      continue;
+    }
+    if (character === ",") {
+      formatted += ", ";
+      continue;
+    }
+    formatted += character;
+  }
+  return formatted.trim();
 }
 
 export function hasGraphQLErrors(response) {

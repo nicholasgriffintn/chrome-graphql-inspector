@@ -1,17 +1,31 @@
-import { parseGraphQLPayload, looksGraphQL, parseMultipart, formatJson, hasGraphQLErrors, safeJsonParse } from "./graphql.js";
+import { parseGraphQLPayload, looksGraphQL, parseMultipart, formatGraphQLQuery, formatJson, inferOperationTypeFromHeaders, safeJsonParse } from "./graphql.js";
 import { toCurl, toFetch, downloadJson } from "./exports.js";
+import { renderCode, renderObjectTree, renderRawCode } from "./panel-renderers.js";
+import {
+  badgeLabel,
+  badgeType,
+  buildSearchIndex,
+  boundedJson,
+  escapeHtml,
+  filterItems,
+  formatAbsoluteTime,
+  formatDuration,
+  formatRelativeTime,
+  getOperationCounts,
+  isErrorItem,
+  parseOptionalJson,
+  shortUrl
+} from "./panel-model.js";
 
 const inspectedTabId = chrome.devtools.inspectedWindow.tabId;
-const TREE_CHILD_LIMIT = 200;
-const RAW_PREVIEW_LIMIT = 200000;
-const SEARCH_FIELD_LIMIT = 50000;
 const TIMELINE_DATA_LIMIT = 10000;
-const state = { items: [], selectedId: null, ws: new Map(), http: new Map(), graphiql: new Map(), preserve: false, diagnostics: { background: 0, network: 0, har: 0 } };
+const state = { items: [], selectedId: null, ws: new Map(), http: new Map(), graphiql: new Map(), graphiqlLastResponse: "", preserve: false, diagnostics: { background: 0, network: 0, har: 0 } };
 const $ = id => document.getElementById(id);
 const els = Object.fromEntries([
-  "modeInspector","modeGraphiql","inspectorView","graphiqlView",
-  "search","typeFilter","errorsOnly","preserve","requestCount","resetFilters","clear","exportAll","requests","empty","noSelection","detail","detailName","detailMeta","queryView","variablesView","responseView","responseRawView","headersView","timelineView","copyCurl","copyFetch","copyJson","tabs",
-  "graphiqlEndpoint","graphiqlMethod","graphiqlUseSelected","graphiqlSend","graphiqlOperationName","graphiqlQuery","graphiqlVariables","graphiqlHeaders","graphiqlStatus","graphiqlTabs","graphiqlResponse","graphiqlResponseRaw","graphiqlResponseHeaders"
+  "modeInspector","modeGraphiql","inspectorView","graphiqlView","inspectorActions","captureTotal","captureNumber",
+  "search","typeFilter","typeSegments","errorsOnly","preserve","requestCount","resetFilters","clear","exportAll","requests","empty","queryCount","mutationCount","subscriptionCount","errorCount",
+  "noSelection","detail","detailType","detailName","detailEndpoint","detailPersisted","detailMeta","detailStatus","detailDuration","responseState","responseViewToggle","copyResponse","openGraphiql","queryView","variablesView","extensionsView","extensionsSection","responseView","responseRawView","headersView","timingSummary","timelineView","copyCurl","copyFetch","copyJson","tabs",
+  "graphiqlEndpoint","graphiqlMethod","graphiqlUseSelected","graphiqlSend","graphiqlSendLabel","graphiqlOperationName","graphiqlQuery","graphiqlInputTabs","graphiqlVariables","graphiqlHeaders","graphiqlStatus","graphiqlTabs","graphiqlCopyResponse","graphiqlResponse","graphiqlResponseRaw","graphiqlResponseHeaders","toast"
 ].map(id => [id, $(id)]));
 
 const port = chrome.runtime.connect({ name: "graphql-panel" });
@@ -22,6 +36,8 @@ chrome.storage.local.get({ preserve: false }).then(({ preserve }) => { state.pre
 chrome.devtools.network.onNavigated.addListener(() => { if (!state.preserve) clear(); });
 chrome.devtools.network.onRequestFinished.addListener(captureRequest);
 loadHarEntries();
+const relativeTimeTimer = setInterval(updateRelativeTimes, 15000);
+relativeTimeTimer.unref?.();
 
 async function captureRequest(request) {
   const entry = request.request;
@@ -91,7 +107,10 @@ function handleStreamEvent(message) {
       item = { id, source: "sse", url: message.url, method: "SSE", status: 200, startedAt: message.at, duration: null, operationName: "SSE subscription", operationType: "subscription", query: "", variables: {}, requestHeaders: [], responseHeaders: [], response: [], timeline: [] };
       addItem(item);
     }
-    item.response.push(parsed); item.timeline.push({ at: message.at, direction: "in", data: summarizeTimelineData(parsed) }); render();
+    item.response.push(parsed);
+    item.timeline.push({ at: message.at, direction: "in", data: summarizeTimelineData(parsed) });
+    item.searchIndex = buildSearchIndex(item);
+    render();
   }
 }
 
@@ -136,6 +155,7 @@ function addHttpItems(event) {
   const contentType = responseHeaders.find(h => h.name.toLowerCase() === "content-type")?.value || "";
   const multipart = parseMultipart(responseText, contentType);
   const parsedResponse = multipart ?? safeJsonParse(responseText) ?? responseText;
+  const headerOperationType = inferOperationTypeFromHeaders(event.requestHeaders);
 
   payloads.forEach((payload, batchIndex) => {
     const id = `http:${event.requestId}:${batchIndex}`;
@@ -158,7 +178,8 @@ function addHttpItems(event) {
       responseRaw: responseText,
       timeline: [{ at: event.startedAt, direction: "out", data: summarizeTimelineData(postData) }]
         .concat(event.phase === "start" ? [] : [{ at: event.startedAt + (event.duration || 0), direction: event.phase === "error" ? "error" : "in", data: event.error || summarizeTimelineData(parsedResponse, responseText.length) }]),
-      ...payload
+      ...payload,
+      operationType: payload.operationType === "unknown" ? headerOperationType : payload.operationType
     };
     item.searchIndex = buildSearchIndex(item);
     if (existing) {
@@ -186,6 +207,7 @@ function handleWsFrame(message) {
   item.timeline.push({ at: message.at, direction: message.direction, data: summarizeTimelineData(frame) });
   if (message.direction === "in" && ["next", "data", "error"].includes(type)) item.response.push(frame.payload ?? frame);
   if (["complete", "stop"].includes(type)) item.duration = message.at - item.startedAt;
+  item.searchIndex = buildSearchIndex(item);
   render();
 }
 
@@ -254,92 +276,182 @@ function hasCapturedHttpRequest(url, method, requestBody, startedAt) {
   );
 }
 function visibleItems() {
-  const search = els.search.value.trim().toLowerCase();
-  return state.items.filter(item => {
-    if (els.typeFilter.value !== "all" && item.operationType !== els.typeFilter.value) return false;
-    if (els.errorsOnly.checked && !(item.status >= 400 || hasGraphQLErrors(item.response))) return false;
-    if (!search) return true;
-    item.searchIndex ||= buildSearchIndex(item);
-    return item.searchIndex.includes(search);
+  return filterItems(state.items, {
+    search: els.search.value,
+    type: els.typeFilter.value,
+    errorsOnly: els.errorsOnly.checked
   });
-}
-
-function buildSearchIndex(item) {
-  return [
-    item.operationName,
-    item.operationType,
-    item.method,
-    item.status,
-    item.url,
-    item.query,
-    boundedJson(item.variables),
-    boundedJson(item.extensions),
-    boundedText(item.responseRaw),
-    boundedJson(item.response)
-  ].filter(value => value !== undefined && value !== null && value !== "").join("\n").toLowerCase();
-}
-
-function boundedJson(value, limit = SEARCH_FIELD_LIMIT) {
-  try { return boundedText(JSON.stringify(value), limit); } catch { return ""; }
-}
-
-function boundedText(value, limit = SEARCH_FIELD_LIMIT) {
-  const text = typeof value === "string" ? value : String(value ?? "");
-  return text.length > limit ? text.slice(0, limit) : text;
 }
 
 function render() {
   const items = visibleItems();
+  if (!items.some(item => item.id === state.selectedId)) state.selectedId = items[0]?.id ?? null;
+  const counts = getOperationCounts(state.items);
+
+  els.captureNumber.textContent = state.items.length;
   els.requestCount.textContent = `${items.length}/${state.items.length}`;
+  els.queryCount.textContent = counts.query;
+  els.mutationCount.textContent = counts.mutation;
+  els.subscriptionCount.textContent = counts.subscription;
+  els.errorCount.textContent = counts.errors;
+  els.resetFilters.disabled = !els.search.value && els.typeFilter.value === "all" && !els.errorsOnly.checked;
+
+  for (const button of els.typeSegments.querySelectorAll("[data-type-filter]")) {
+    const active = button.dataset.typeFilter === els.typeFilter.value;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
+  for (const button of document.querySelectorAll("[data-summary-filter]")) {
+    const active = button.dataset.summaryFilter === els.typeFilter.value;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
+
   els.empty.hidden = items.length > 0;
-  els.empty.textContent = emptyMessage();
+  renderEmptyState();
   els.requests.replaceChildren(...items.map(item => {
     const div = document.createElement("div");
-    div.className = `request row${item.id === state.selectedId ? " selected" : ""}`;
+    const error = isErrorItem(item);
+    div.className = `request${item.id === state.selectedId ? " selected" : ""}${error ? " error" : ""}`;
     div.role = "option";
     div.tabIndex = 0;
+    div.dataset.requestId = item.id;
     div.setAttribute("aria-selected", item.id === state.selectedId ? "true" : "false");
-    const error = item.status >= 400 || hasGraphQLErrors(item.response);
-    const badgeClass = badgeType(item);
-    div.innerHTML = `<span class="status ${error ? "error" : ""}">${escapeHtml(String(item.status ?? "—"))}</span><span class="operation" title="${escapeHtml(item.operationName)}">${escapeHtml(item.operationName)}</span><span class="badge ${badgeClass}">${escapeHtml(item.operationType)}</span><span>${item.duration == null ? "live" : `${Math.round(item.duration)} ms`}</span><span class="endpoint" title="${escapeHtml(item.url)}">${escapeHtml(shortUrl(item.url))}</span>`;
+    div.innerHTML = `
+      <span class="badge ${badgeType(item)}">${escapeHtml(badgeLabel(item))}</span>
+      <span class="request-main">
+        <span class="operation" title="${escapeHtml(item.operationName)}">${escapeHtml(item.operationName)}</span>
+        <span class="endpoint" title="${escapeHtml(item.url)}">${escapeHtml(shortUrl(item.url))}</span>
+      </span>
+      <span class="request-meta">
+        <span class="request-status">${escapeHtml(String(item.status ?? "pending"))}</span>
+        <span>${escapeHtml(formatDuration(item.duration))}</span>
+        <span class="request-time" data-started-at="${escapeHtml(String(item.startedAt))}">${escapeHtml(formatRelativeTime(item.startedAt))}</span>
+      </span>`;
     div.onclick = () => { state.selectedId = item.id; render(); };
+    div.onkeydown = event => handleRequestKeydown(event, items, item.id);
     return div;
   }));
   renderDetail();
 }
 
-function emptyMessage() {
+function renderEmptyState() {
+  if (els.empty.hidden) return;
+  const icon = document.createElement("span");
+  icon.className = "empty-mark";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = "GQ";
+  const title = document.createElement("strong");
+  const message = document.createElement("span");
   const { background, network, har } = state.diagnostics;
   if (state.items.length) {
-    return `${state.items.length} GraphQL request${state.items.length === 1 ? "" : "s"} captured, but none match the current search/filter settings. Use Reset filters to show them. Capture events seen: background ${background}, network ${network}, HAR ${har}.`;
+    title.textContent = "No matching operations";
+    message.textContent = `${state.items.length} captured · background ${background} · network ${network} · HAR ${har}`;
+  } else if (background || network || har) {
+    title.textContent = "Traffic detected";
+    message.textContent = `No request payload is ready yet · background ${background} · network ${network} · HAR ${har}`;
+  } else {
+    title.textContent = "No GraphQL traffic yet";
+    message.textContent = "Run an operation or reload the inspected page.";
   }
-  if (background || network || har) {
-    return `GraphQL-like traffic was observed, but no request payloads could be rendered yet. Capture events seen: background ${background}, network ${network}, HAR ${har}.`;
-  }
-  return "Run a GraphQL operation with DevTools open. If requests already exist in the Network tab, reload this extension and reopen DevTools so webRequest and HAR capture can initialise.";
+  els.empty.replaceChildren(icon, title, message);
 }
 
 function renderDetail() {
-  const item = selected(); els.noSelection.hidden = Boolean(item); els.detail.hidden = !item; if (!item) return;
+  const item = selected();
+  els.noSelection.hidden = Boolean(item);
+  els.detail.hidden = !item;
+  if (!item) return;
+
+  const error = isErrorItem(item);
+  const responsePending = item.status === undefined || item.status === null;
+  els.detailType.className = `badge ${badgeType(item)}`;
+  els.detailType.textContent = badgeLabel(item);
   els.detailName.textContent = item.operationName;
+  els.detailEndpoint.textContent = item.url;
+  els.detailEndpoint.title = item.url;
+  els.detailPersisted.hidden = !item.persisted;
   els.detailMeta.textContent = `${item.operationType} • ${item.method} • ${item.status ?? "pending"} • ${item.url}${item.batchSize > 1 ? ` • batch ${item.batchIndex + 1}/${item.batchSize}` : ""}`;
+  els.detailStatus.textContent = String(item.status ?? "pending");
+  els.detailStatus.classList.toggle("error", error);
+  els.detailDuration.textContent = formatDuration(item.duration);
+  els.responseState.textContent = responsePending ? "Waiting for response" : error ? "Response contains errors" : "OK";
+  els.responseState.classList.toggle("error", error);
   renderCode(els.queryView, item.query ? formatGraphQLQuery(item.query) : (item.persisted ? item.extensions : "No query text captured."));
   renderCode(els.variablesView, item.variables ?? {});
+  const hasExtensions = item.extensions && Object.keys(item.extensions).length > 0;
+  els.extensionsSection.hidden = !hasExtensions;
+  if (hasExtensions) renderCode(els.extensionsView, item.extensions);
   renderObjectTree(els.responseView, item.response || "No response captured.");
   renderRawCode(els.responseRawView, item.responseRaw || item.response || "No response captured.");
   renderCode(els.headersView, { request: Object.fromEntries((item.requestHeaders || []).map(h => [h.name, h.value])), response: Object.fromEntries((item.responseHeaders || []).map(h => [h.name, h.value])) });
+  renderTimingSummary(item);
   renderRawCode(els.timelineView, item.timeline || [{ at: item.startedAt, duration: item.duration }]);
+}
+
+function renderTimingSummary(item) {
+  const cards = [
+    ["Started", formatAbsoluteTime(item.startedAt)],
+    ["Duration", formatDuration(item.duration)],
+    ["Transport", item.method || item.source?.toUpperCase() || "Unknown"],
+    ["Capture source", item.captureSource || item.source || "Unknown"]
+  ];
+  els.timingSummary.replaceChildren(...cards.map(([label, value]) => {
+    const card = document.createElement("div");
+    card.className = "timing-card";
+    const name = document.createElement("span");
+    name.textContent = label;
+    const detail = document.createElement("strong");
+    detail.textContent = value;
+    detail.title = value;
+    card.append(name, detail);
+    return card;
+  }));
+}
+
+function handleRequestKeydown(event, items, itemId) {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    state.selectedId = itemId;
+    render();
+    focusSelectedRequest();
+    return;
+  }
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const currentIndex = items.findIndex(item => item.id === itemId);
+  const nextIndex = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? items.length - 1
+      : Math.min(items.length - 1, Math.max(0, currentIndex + (event.key === "ArrowDown" ? 1 : -1)));
+  state.selectedId = items[nextIndex]?.id ?? itemId;
+  render();
+  focusSelectedRequest();
+}
+
+function focusSelectedRequest() {
+  queueMicrotask(() => {
+    const request = Array.from(els.requests.children).find(element => element.dataset.requestId === state.selectedId);
+    request?.focus();
+  });
+}
+
+function updateRelativeTimes() {
+  for (const element of document.querySelectorAll("[data-started-at]")) {
+    element.textContent = formatRelativeTime(Number(element.dataset.startedAt));
+  }
 }
 
 function setMode(mode) {
   const graphiql = mode === "graphiql";
   els.modeInspector.classList.toggle("active", !graphiql);
   els.modeGraphiql.classList.toggle("active", graphiql);
+  els.modeInspector.setAttribute("aria-selected", String(!graphiql));
+  els.modeGraphiql.setAttribute("aria-selected", String(graphiql));
   els.inspectorView.hidden = graphiql;
   els.graphiqlView.hidden = !graphiql;
-  for (const control of [els.search, els.typeFilter, els.errorsOnly, els.preserve, els.requestCount, els.resetFilters, els.clear, els.exportAll]) {
-    (control.closest("label") || control).hidden = graphiql;
-  }
+  els.inspectorActions.hidden = graphiql;
   if (graphiql && selected()) populateGraphiqlFromSelected(false);
 }
 
@@ -375,7 +487,12 @@ function sendGraphiqlRequest() {
     return;
   }
 
-  els.graphiqlStatus.textContent = "Sending...";
+  setGraphiqlSending(true);
+  state.graphiqlLastResponse = "";
+  els.graphiqlCopyResponse.disabled = true;
+  els.graphiqlResponse.classList.remove("graphiql-response-empty");
+  els.graphiqlStatus.textContent = "Sending…";
+  els.graphiqlStatus.className = "";
   renderObjectTree(els.graphiqlResponse, {});
   renderCode(els.graphiqlResponseRaw, "");
   renderCode(els.graphiqlResponseHeaders, {});
@@ -491,204 +608,151 @@ function handleGraphiqlResult(message) {
     return;
   }
   const parsed = safeJsonParse(message.text) ?? message.text;
+  state.graphiqlLastResponse = message.text || "";
+  els.graphiqlCopyResponse.disabled = !state.graphiqlLastResponse;
+  setGraphiqlSending(false);
   els.graphiqlStatus.textContent = `${message.status} ${message.statusText || ""} • ${message.duration ?? Math.round(performance.now() - pending.startedAt)} ms`;
+  els.graphiqlStatus.className = message.status >= 400 ? "error" : "success";
   renderObjectTree(els.graphiqlResponse, parsed || "No response body.");
   renderRawCode(els.graphiqlResponseRaw, message.text || "No response body.");
   renderCode(els.graphiqlResponseHeaders, { url: message.url, ...message.headers });
 }
 
-function parseOptionalJson(value, label) {
-  const trimmed = value.trim();
-  if (!trimmed) return {};
-  const parsed = safeJsonParse(trimmed);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${label} must be a JSON object.`);
-  return parsed;
-}
-
 function renderGraphiqlError(error) {
   const details = typeof error === "string" ? { message: error } : error;
+  state.graphiqlLastResponse = JSON.stringify({ error: details }, null, 2);
+  els.graphiqlCopyResponse.disabled = false;
+  els.graphiqlResponse.classList.remove("graphiql-response-empty");
+  setGraphiqlSending(false);
   els.graphiqlStatus.textContent = "Error";
+  els.graphiqlStatus.className = "error";
   renderObjectTree(els.graphiqlResponse, { error: details });
   renderCode(els.graphiqlResponseRaw, { error: details });
   renderCode(els.graphiqlResponseHeaders, {});
 }
 
-function shortUrl(value) { try { const u = new URL(value); return `${u.host}${u.pathname}`; } catch { return value; } }
-function escapeHtml(value) { return value.replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c])); }
-function badgeType(item) { return item.persisted ? "persisted" : ["query", "mutation", "subscription"].includes(item.operationType) ? item.operationType : "unknown"; }
-function renderCode(element, value) {
-  const formatted = formatJson(value) || String(value ?? "");
-  element.innerHTML = isJsonLike(formatted) ? highlightJson(formatted) : escapeHtml(formatted);
+function setGraphiqlSending(sending) {
+  els.graphiqlSend.disabled = sending;
+  els.graphiqlSendLabel.textContent = sending ? "Sending…" : "Send request";
 }
-function renderRawCode(element, value) {
-  const raw = typeof value === "string" ? value : formatJson(value);
-  if (raw.length > RAW_PREVIEW_LIMIT) {
-    const preview = raw.slice(0, RAW_PREVIEW_LIMIT);
-    element.textContent = `${preview}\n\n... truncated preview: showing ${RAW_PREVIEW_LIMIT.toLocaleString()} of ${raw.length.toLocaleString()} characters. Use Export or Copy JSON for the full payload.`;
-    return;
-  }
-  renderCode(element, value);
-}
-function formatGraphQLQuery(query) {
-  const text = String(query || "").trim();
-  if (!text) return "";
-  let formatted = "";
-  let indent = 0;
-  let inString = false;
-  let quote = "";
-  let escaping = false;
-  const writeIndent = () => { formatted += "  ".repeat(Math.max(indent, 0)); };
-  const trimLineEnd = () => { formatted = formatted.replace(/[ \t]+$/g, ""); };
-  const newline = () => {
-    trimLineEnd();
-    if (!formatted.endsWith("\n")) formatted += "\n";
-    writeIndent();
-  };
 
-  for (let i = 0; i < text.length; i += 1) {
-    const char = text[i];
-    if (inString) {
-      formatted += char;
-      if (escaping) escaping = false;
-      else if (char === "\\") escaping = true;
-      else if (char === quote) inString = false;
-      continue;
-    }
-    if (char === "\"" || char === "'") {
-      inString = true;
-      quote = char;
-      formatted += char;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      if (!/[\s({[]$/.test(formatted)) formatted += " ";
-      continue;
-    }
-    if (char === "{") {
-      trimLineEnd();
-      formatted += " {";
-      indent += 1;
-      newline();
-      continue;
-    }
-    if (char === "}") {
-      indent -= 1;
-      newline();
-      formatted += "}";
-      if (text.slice(i + 1).trim()) newline();
-      continue;
-    }
-    if (char === ",") {
-      formatted += ", ";
-      continue;
-    }
-    formatted += char;
+let toastTimer;
+async function copy(text, successMessage) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(successMessage);
+  } catch {
+    showToast("Unable to copy to the clipboard", true);
   }
-  return formatted.trim();
 }
-function renderObjectTree(element, value) {
-  element.replaceChildren();
-  const parsed = typeof value === "string" ? safeJsonParse(value) : value;
-  if (!parsed || typeof parsed !== "object") {
-    const empty = document.createElement("pre");
-    renderCode(empty, value);
-    element.append(empty);
-    return;
-  }
-  element.append(createTreeNode(parsed, "root", true));
-}
-function createTreeNode(value, label = "", root = false) {
-  if (!value || typeof value !== "object") return createPrimitiveNode(label, value);
-  const entries = Array.isArray(value) ? value.map((item, index) => [index, item]) : Object.entries(value);
-  const details = document.createElement("details");
-  details.className = "tree-node";
-  details.open = root;
-  const summary = document.createElement("summary");
-  summary.append(createLabel(label, value, entries.length, root));
-  details.append(summary);
-  if (root) appendTreeChildren(details, entries);
-  else details.addEventListener("toggle", () => {
-    if (details.open && !details.dataset.loaded) appendTreeChildren(details, entries);
-  }, { once: true });
-  return details;
-}
-function appendTreeChildren(details, entries, showAll = false) {
-  details.dataset.loaded = "true";
-  Array.from(details.children).find(child => child.classList.contains("tree-children"))?.remove();
-  const children = document.createElement("div");
-  children.className = "tree-children";
-  const visibleEntries = showAll ? entries : entries.slice(0, TREE_CHILD_LIMIT);
-  for (const [key, child] of visibleEntries) children.append(createTreeNode(child, key));
-  if (!showAll && entries.length > TREE_CHILD_LIMIT) {
-    const button = document.createElement("button");
-    button.className = "tree-more";
-    button.type = "button";
-    button.textContent = `Show ${entries.length - TREE_CHILD_LIMIT} more`;
-    button.onclick = event => {
-      event.stopPropagation();
-      appendTreeChildren(details, entries, true);
-    };
-    children.append(button);
-  }
-  details.append(children);
-}
-function createPrimitiveNode(label, value) {
-  const row = document.createElement("div");
-  row.className = "tree-leaf";
-  row.append(createKey(label), document.createTextNode(": "));
-  const span = document.createElement("span");
-  span.className = `json-${value === null ? "null" : typeof value}`;
-  span.textContent = value === null ? "null" : JSON.stringify(value);
-  row.append(span);
-  return row;
-}
-function createLabel(label, value, size, root) {
-  const fragment = document.createDocumentFragment();
-  if (!root) fragment.append(createKey(label), document.createTextNode(": "));
-  fragment.append(document.createTextNode(Array.isArray(value) ? "[" : "{"));
-  const count = document.createElement("span");
-  count.className = "tree-count";
-  count.textContent = ` ${size} ${size === 1 ? "item" : "items"} `;
-  fragment.append(count, document.createTextNode(Array.isArray(value) ? "]" : "}"));
-  return fragment;
-}
-function createKey(value) {
-  const key = document.createElement("span");
-  key.className = "json-key";
-  key.textContent = typeof value === "number" || /^\d+$/.test(String(value)) ? String(value) : `"${value}"`;
-  return key;
-}
-function isJsonLike(value) { return /^[\s]*[{[]/.test(value); }
-function highlightJson(value) {
-  return escapeHtml(value).replace(/(&quot;(?:\\.|[^\\])*?&quot;)(\s*:)?|\b(true|false)\b|\bnull\b|-?\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b/gi, (match, string, colon, boolean) => {
-    if (string) return colon ? `<span class="json-key">${string}</span>${colon}` : `<span class="json-string">${string}</span>`;
-    if (boolean) return `<span class="json-boolean">${boolean}</span>`;
-    if (match === "null") return `<span class="json-null">null</span>`;
-    return `<span class="json-number">${match}</span>`;
-  });
-}
-async function copy(text) { await navigator.clipboard.writeText(text); }
 
-els.search.oninput = render; els.typeFilter.onchange = render; els.errorsOnly.onchange = render;
+function showToast(message, error = false) {
+  clearTimeout(toastTimer);
+  els.toast.textContent = message;
+  els.toast.classList.toggle("error", error);
+  els.toast.hidden = false;
+  toastTimer = setTimeout(() => { els.toast.hidden = true; }, 1800);
+  toastTimer.unref?.();
+}
+
+function closeActionMenu() {
+  const menu = els.copyCurl.closest("details");
+  if (menu) menu.open = false;
+}
+
+els.search.oninput = render;
+els.typeFilter.onchange = render;
+els.errorsOnly.onchange = render;
 els.preserve.onchange = () => { state.preserve = els.preserve.checked; chrome.storage.local.set({ preserve: state.preserve }); };
 els.resetFilters.onclick = () => { els.search.value = ""; els.typeFilter.value = "all"; els.errorsOnly.checked = false; render(); };
 els.clear.onclick = clear;
 els.exportAll.onclick = () => downloadJson(`graphql-inspector-${new Date().toISOString().replace(/[:.]/g,"-")}.json`, visibleItems());
-els.copyCurl.onclick = () => selected() && copy(toCurl(selected()));
-els.copyFetch.onclick = () => selected() && copy(toFetch(selected()));
-els.copyJson.onclick = () => selected() && copy(JSON.stringify(selected(), null, 2));
+els.copyCurl.onclick = () => { if (selected()) copy(toCurl(selected()), "cURL copied"); closeActionMenu(); };
+els.copyFetch.onclick = () => { if (selected()) copy(toFetch(selected()), "Fetch request copied"); closeActionMenu(); };
+els.copyJson.onclick = () => { if (selected()) copy(JSON.stringify(selected(), null, 2), "Operation JSON copied"); closeActionMenu(); };
+els.copyResponse.onclick = () => {
+  const item = selected();
+  if (!item) return;
+  copy(item.responseRaw || JSON.stringify(item.response, null, 2), "Response copied");
+};
+els.openGraphiql.onclick = () => {
+  populateGraphiqlFromSelected(true);
+  setMode("graphiql");
+  closeActionMenu();
+};
 els.modeInspector.onclick = () => setMode("inspector");
 els.modeGraphiql.onclick = () => setMode("graphiql");
 els.graphiqlUseSelected.onclick = () => populateGraphiqlFromSelected(true);
 els.graphiqlSend.onclick = sendGraphiqlRequest;
+els.graphiqlCopyResponse.onclick = () => {
+  if (state.graphiqlLastResponse) copy(state.graphiqlLastResponse, "GraphQLi response copied");
+};
+els.typeSegments.onclick = event => {
+  const button = event.target.closest("[data-type-filter]");
+  if (!button) return;
+  els.typeFilter.value = button.dataset.typeFilter;
+  render();
+};
+for (const button of document.querySelectorAll("[data-summary-filter]")) {
+  button.onclick = () => {
+    els.typeFilter.value = els.typeFilter.value === button.dataset.summaryFilter
+      ? "all"
+      : button.dataset.summaryFilter;
+    render();
+  };
+}
+els.responseViewToggle.onclick = event => {
+  const button = event.target.closest("[data-response-view]");
+  if (!button) return;
+  const raw = button.dataset.responseView === "raw";
+  els.responseView.hidden = raw;
+  els.responseRawView.hidden = !raw;
+  for (const viewButton of els.responseViewToggle.querySelectorAll("button")) {
+    const active = viewButton === button;
+    viewButton.classList.toggle("active", active);
+    viewButton.setAttribute("aria-pressed", String(active));
+  }
+};
+els.graphiqlInputTabs.onclick = event => {
+  const button = event.target.closest("[data-graphiql-input-tab]");
+  if (!button) return;
+  for (const tab of els.graphiqlInputTabs.querySelectorAll("button")) {
+    const active = tab === button;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", String(active));
+  }
+  for (const panel of els.graphiqlView.querySelectorAll(".input-tab-panel")) {
+    panel.hidden = panel.id !== `graphiql-input-${button.dataset.graphiqlInputTab}`;
+  }
+};
 els.tabs.onclick = event => {
   const button = event.target.closest("button[data-tab]"); if (!button) return;
-  for (const b of els.tabs.querySelectorAll("button")) b.classList.toggle("active", b === button);
+  for (const b of els.tabs.querySelectorAll("button")) {
+    const active = b === button;
+    b.classList.toggle("active", active);
+    b.setAttribute("aria-selected", String(active));
+  }
   for (const panel of els.detail.querySelectorAll(".tab-panel")) panel.hidden = panel.id !== `tab-${button.dataset.tab}`;
 };
 els.graphiqlTabs.onclick = event => {
   const button = event.target.closest("button[data-graphiql-tab]"); if (!button) return;
-  for (const b of els.graphiqlTabs.querySelectorAll("button")) b.classList.toggle("active", b === button);
+  for (const b of els.graphiqlTabs.querySelectorAll("button")) {
+    const active = b === button;
+    b.classList.toggle("active", active);
+    b.setAttribute("aria-selected", String(active));
+  }
   for (const panel of els.graphiqlView.querySelectorAll(".tab-panel")) panel.hidden = panel.id !== `graphiql-tab-${button.dataset.graphiqlTab}`;
 };
+document.addEventListener("keydown", event => {
+  const editing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
+  if (event.key === "/" && !editing && !els.inspectorView.hidden) {
+    event.preventDefault();
+    els.search.focus();
+    return;
+  }
+  if (event.key === "Escape" && document.activeElement === els.search && els.search.value) {
+    els.search.value = "";
+    render();
+  }
+});
 render();
