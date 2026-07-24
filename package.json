@@ -1,0 +1,13 @@
+{
+  "name": "graphql-inspector",
+  "version": "1.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "package": "zip -r graphql-inspector.zip manifest.json src icons README.md PRIVACY.md LICENSE package.json"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

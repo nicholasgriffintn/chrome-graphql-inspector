@@ -1,0 +1,113 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GraphQL Inspector</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <header class="toolbar">
+    <div class="mode-tabs" role="tablist" aria-label="Panel mode">
+      <button id="modeInspector" class="active" type="button">Inspector</button>
+      <button id="modeGraphiql" type="button">GraphQLi</button>
+    </div>
+    <input id="search" type="search" placeholder="Search operation, URL, variables, response…" aria-label="Search requests">
+    <select id="typeFilter" aria-label="Operation type">
+      <option value="all">All operations</option>
+      <option value="query">Queries</option>
+      <option value="mutation">Mutations</option>
+      <option value="subscription">Subscriptions</option>
+      <option value="unknown">Unknown</option>
+    </select>
+    <label><input id="errorsOnly" type="checkbox"> Errors</label>
+    <label><input id="preserve" type="checkbox"> Preserve</label>
+    <span id="requestCount" class="muted count"></span>
+    <button id="resetFilters" title="Reset search and filters">Reset filters</button>
+    <button id="clear" title="Clear captured requests">Clear</button>
+    <button id="exportAll" title="Export visible requests as JSON">Export</button>
+  </header>
+
+  <main id="inspectorView" class="layout">
+    <section class="request-pane">
+      <div class="request-header row">
+        <span>Status</span><span>Operation</span><span>Type</span><span>Duration</span><span>Endpoint</span>
+      </div>
+      <div id="empty" class="empty">Run a GraphQL operation with DevTools open.</div>
+      <div id="requests" role="listbox" aria-label="GraphQL requests"></div>
+    </section>
+
+    <section class="detail-pane">
+      <div id="noSelection" class="empty">Select a request.</div>
+      <div id="detail" hidden>
+        <div class="detail-title">
+          <div><strong id="detailName"></strong><div id="detailMeta" class="muted"></div></div>
+          <div class="detail-actions">
+            <button id="copyCurl">Copy cURL</button>
+            <button id="copyFetch">Copy fetch</button>
+            <button id="copyJson">Copy JSON</button>
+          </div>
+        </div>
+        <nav id="tabs" class="tabs">
+          <button data-tab="query" class="active">Query</button>
+          <button data-tab="variables">Variables</button>
+          <button data-tab="response">Response</button>
+          <button data-tab="responseRaw">Response (Raw)</button>
+          <button data-tab="headers">Headers</button>
+          <button data-tab="timeline">Timeline</button>
+        </nav>
+        <section id="tab-query" class="tab-panel"><pre id="queryView"></pre></section>
+        <section id="tab-variables" class="tab-panel" hidden><pre id="variablesView"></pre></section>
+        <section id="tab-response" class="tab-panel" hidden><div id="responseView" class="object-view"></div></section>
+        <section id="tab-responseRaw" class="tab-panel" hidden><pre id="responseRawView"></pre></section>
+        <section id="tab-headers" class="tab-panel" hidden><pre id="headersView"></pre></section>
+        <section id="tab-timeline" class="tab-panel" hidden><pre id="timelineView"></pre></section>
+      </div>
+    </section>
+  </main>
+
+  <main id="graphiqlView" class="graphiql-layout" hidden>
+    <section class="graphiql-editor">
+      <div class="graphiql-bar">
+        <input id="graphiqlEndpoint" type="url" placeholder="Endpoint URL" aria-label="GraphQL endpoint">
+        <select id="graphiqlMethod" aria-label="GraphQL method">
+          <option value="POST">POST</option>
+          <option value="GET">GET</option>
+        </select>
+        <button id="graphiqlUseSelected" type="button">Use selected</button>
+        <button id="graphiqlSend" type="button">Send</button>
+      </div>
+      <input id="graphiqlOperationName" class="graphiql-operation" type="text" placeholder="Operation name (optional)" aria-label="Operation name">
+      <div class="graphiql-grid">
+        <label>
+          <span>Query</span>
+          <textarea id="graphiqlQuery" spellcheck="false" placeholder="query Example { viewer { id } }"></textarea>
+        </label>
+        <label>
+          <span>Variables</span>
+          <textarea id="graphiqlVariables" spellcheck="false" placeholder="{&#10;  &quot;id&quot;: &quot;123&quot;&#10;}"></textarea>
+        </label>
+        <label>
+          <span>Headers</span>
+          <textarea id="graphiqlHeaders" spellcheck="false" placeholder="{&#10;  &quot;content-type&quot;: &quot;application/json&quot;&#10;}"></textarea>
+        </label>
+      </div>
+    </section>
+    <section class="graphiql-result">
+      <div class="graphiql-result-title">
+        <strong>Result</strong>
+        <span id="graphiqlStatus" class="muted"></span>
+      </div>
+      <nav id="graphiqlTabs" class="tabs">
+        <button data-graphiql-tab="object" class="active">Response</button>
+        <button data-graphiql-tab="raw">Response (Raw)</button>
+        <button data-graphiql-tab="headers">Headers</button>
+      </nav>
+      <section id="graphiql-tab-object" class="tab-panel"><div id="graphiqlResponse" class="object-view"></div></section>
+      <section id="graphiql-tab-raw" class="tab-panel" hidden><pre id="graphiqlResponseRaw"></pre></section>
+      <section id="graphiql-tab-headers" class="tab-panel" hidden><pre id="graphiqlResponseHeaders"></pre></section>
+    </section>
+  </main>
+  <script type="module" src="panel.js"></script>
+</body>
+</html>
