@@ -16,6 +16,7 @@ test("the page bridge forwards only recognised inspector events", () => {
     runtime: {
       id: "extension-id",
       lastError: undefined,
+      onMessage: { addListener: listener => { listeners.runtimeMessage = listener; } },
       sendMessage: (message, callback) => {
         sent.push(message);
         callback();
@@ -49,4 +50,44 @@ test("the page bridge forwards only recognised inspector events", () => {
     }
   });
   assert.equal(sent.length, 2);
+
+  listeners.message({
+    source: window,
+    data: {
+      source: "private-graphql-inspector",
+      type: "ws-frame",
+      socketId: "socket-1",
+      url: "wss://example.test/graphql",
+      data: "x".repeat(1_000_001),
+      at: Date.now()
+    }
+  });
+  assert.equal(sent.length, 2);
+});
+
+test("the bridge relays capture state from the extension to the page hook", () => {
+  const listeners = {};
+  const posted = [];
+  const window = {
+    addEventListener: (type, listener) => { listeners[type] = listener; },
+    removeEventListener: () => {},
+    postMessage: message => posted.push(message)
+  };
+  const chrome = {
+    runtime: {
+      id: "extension-id",
+      lastError: undefined,
+      onMessage: { addListener: listener => { listeners.runtimeMessage = listener; } },
+      sendMessage: (_message, callback) => callback()
+    }
+  };
+  vm.runInNewContext(bridgeSource, { window, chrome, Date, JSON });
+
+  listeners.runtimeMessage({ type: "CAPTURE_STATE_CHANGED", enabled: true });
+
+  assert.deepEqual({ ...posted[0] }, {
+    source: "private-graphql-inspector-control",
+    type: "capture-state",
+    enabled: true
+  });
 });

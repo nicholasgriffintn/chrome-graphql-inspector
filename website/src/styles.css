@@ -870,3 +870,12 @@ img {
     transition-duration: 0.01ms !important;
   }
 }
+.release-provenance {
+  max-width: 36rem;
+  margin: 0.8rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.6;
+  opacity: 0.72;
+}
+.release-provenance a { color: inherit; }
+.release-provenance code { overflow-wrap: anywhere; }

@@ -15,8 +15,8 @@
     </div>
 
     <div class="mode-tabs" role="tablist" aria-label="Panel mode">
-      <button id="modeInspector" class="active" type="button" role="tab" aria-selected="true">Inspector</button>
-      <button id="modeGraphiql" type="button" role="tab" aria-selected="false">GraphQLi</button>
+      <button id="modeInspector" class="active" type="button" role="tab" aria-selected="true" aria-controls="inspectorView">Inspector</button>
+      <button id="modeGraphiql" type="button" role="tab" aria-selected="false" aria-controls="graphiqlView" tabindex="-1">GraphQLi</button>
     </div>
 
     <div class="header-actions">
@@ -30,14 +30,20 @@
           <input id="preserve" type="checkbox">
           <span>Preserve log</span>
         </label>
-        <button id="exportAll" class="icon-button" type="button" title="Export visible requests as JSON" aria-label="Export visible requests">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M2.5 11.5v2h11v-2"/></svg>
-        </button>
+        <details class="action-menu export-menu">
+          <summary class="icon-button" title="Export visible requests" aria-label="Export visible requests">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0 3-3m-3 3L5 7M2.5 11.5v2h11v-2"/></svg>
+          </summary>
+          <div class="action-menu-popover">
+            <button id="exportAll" type="button">Export redacted JSON</button>
+            <button id="exportAllSensitive" type="button">Export with credentials…</button>
+          </div>
+        </details>
       </div>
     </div>
   </header>
 
-  <main id="inspectorView" class="inspector-layout">
+  <main id="inspectorView" class="inspector-layout" role="tabpanel" aria-labelledby="modeInspector">
     <aside class="request-pane" aria-label="Captured operations">
       <div class="request-tools">
         <div class="search-field">
@@ -148,22 +154,23 @@
               </summary>
               <div class="action-menu-popover">
                 <button id="openGraphiql" type="button">Open in GraphQLi</button>
-                <button id="copyCurl" type="button">Copy as cURL</button>
-                <button id="copyFetch" type="button">Copy as fetch</button>
-                <button id="copyJson" type="button">Copy operation JSON</button>
+                <button id="copyCurl" type="button">Copy redacted cURL</button>
+                <button id="copyCurlSensitive" type="button">Copy cURL with credentials…</button>
+                <button id="copyFetch" type="button">Copy redacted fetch</button>
+                <button id="copyJson" type="button">Copy redacted operation JSON</button>
               </div>
             </details>
           </div>
         </header>
 
         <nav id="tabs" class="tabs" role="tablist" aria-label="Operation detail">
-          <button data-tab="response" class="active" type="button" role="tab" aria-selected="true">Response</button>
-          <button data-tab="request" type="button" role="tab" aria-selected="false">Request</button>
-          <button data-tab="headers" type="button" role="tab" aria-selected="false">Headers</button>
-          <button data-tab="timeline" type="button" role="tab" aria-selected="false">Timings</button>
+          <button id="detail-tab-response" data-tab="response" class="active" type="button" role="tab" aria-selected="true" aria-controls="tab-response">Response</button>
+          <button id="detail-tab-request" data-tab="request" type="button" role="tab" aria-selected="false" aria-controls="tab-request" tabindex="-1">Request</button>
+          <button id="detail-tab-headers" data-tab="headers" type="button" role="tab" aria-selected="false" aria-controls="tab-headers" tabindex="-1">Headers</button>
+          <button id="detail-tab-timeline" data-tab="timeline" type="button" role="tab" aria-selected="false" aria-controls="tab-timeline" tabindex="-1">Timings</button>
         </nav>
 
-        <section id="tab-response" class="tab-panel response-panel">
+        <section id="tab-response" class="tab-panel response-panel" role="tabpanel" aria-labelledby="detail-tab-response">
           <div class="response-toolbar">
             <span id="responseState">Waiting for response</span>
             <div class="response-actions">
@@ -181,7 +188,7 @@
           <pre id="responseRawView" hidden></pre>
         </section>
 
-        <section id="tab-request" class="tab-panel request-detail-panel" hidden>
+        <section id="tab-request" class="tab-panel request-detail-panel" role="tabpanel" aria-labelledby="detail-tab-request" hidden>
           <section class="code-section">
             <h2>Query</h2>
             <pre id="queryView"></pre>
@@ -196,11 +203,11 @@
           </section>
         </section>
 
-        <section id="tab-headers" class="tab-panel" hidden>
+        <section id="tab-headers" class="tab-panel" role="tabpanel" aria-labelledby="detail-tab-headers" hidden>
           <pre id="headersView"></pre>
         </section>
 
-        <section id="tab-timeline" class="tab-panel timing-panel" hidden>
+        <section id="tab-timeline" class="tab-panel timing-panel" role="tabpanel" aria-labelledby="detail-tab-timeline" hidden>
           <div id="timingSummary" class="timing-summary"></div>
           <pre id="timelineView"></pre>
         </section>
@@ -208,7 +215,7 @@
     </section>
   </main>
 
-  <main id="graphiqlView" class="graphiql-layout" hidden>
+  <main id="graphiqlView" class="graphiql-layout" role="tabpanel" aria-labelledby="modeGraphiql" hidden>
     <section class="graphiql-editor">
       <header class="composer-title">
         <div>

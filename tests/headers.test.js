@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { headersToObject, requestHeadersForReplay } from "../src/headers.js";
-import { toFetch } from "../src/exports.js";
+import { sanitiseOperationsForExport, toCurl, toFetch } from "../src/exports.js";
 
 test("replay headers retain application metadata but remove browser-managed values", () => {
   assert.deepEqual(requestHeadersForReplay([
@@ -25,6 +25,7 @@ test("copied fetch requests use page credentials without forbidden headers", () 
     method: "POST",
     requestHeaders: [
       { name: "Cookie", value: "session=secret" },
+      { name: "Authorization", value: "Bearer secret-token" },
       { name: "Content-Length", value: "99" },
       { name: "X-Client-Version", value: "42" }
     ],
@@ -33,7 +34,7 @@ test("copied fetch requests use page credentials without forbidden headers", () 
 
   assert.match(output, /"credentials": "include"/);
   assert.match(output, /"x-client-version": "42"/);
-  assert.doesNotMatch(output, /session=secret|Content-Length/i);
+  assert.doesNotMatch(output, /session=secret|secret-token|authorization|Content-Length/i);
 });
 
 test("copied GET requests omit JSON headers and request bodies", () => {
@@ -45,6 +46,36 @@ test("copied GET requests omit JSON headers and request bodies", () => {
   });
 
   assert.doesNotMatch(output, /content-type|session=secret|"body"/i);
+});
+
+test("default exports remove captured credentials without changing useful headers", () => {
+  const operation = {
+    requestHeaders: [
+      { name: "Authorization", value: "Bearer secret-token" },
+      { name: "Cookie", value: "session=secret-cookie" },
+      { name: "X-Client-Version", value: "42" },
+    ],
+    responseHeaders: [
+      { name: "Set-Cookie", value: "session=rotated-secret" },
+      { name: "Content-Type", value: "application/json" },
+    ],
+    requestBody: '{"query":"query Viewer { viewer { id } }"}',
+    url: "https://api.example.test/graphql",
+    method: "POST",
+  };
+
+  const curl = toCurl(operation);
+  const exported = sanitiseOperationsForExport([operation]);
+
+  assert.doesNotMatch(curl, /secret-token|secret-cookie|authorization|cookie/i);
+  assert.match(curl, /X-Client-Version: 42/);
+  assert.deepEqual(exported[0].requestHeaders, [
+    { name: "X-Client-Version", value: "42" },
+  ]);
+  assert.deepEqual(exported[0].responseHeaders, [
+    { name: "Content-Type", value: "application/json" },
+  ]);
+  assert.equal(operation.requestHeaders.length, 3);
 });
 
 test("header inspection preserves repeated values", () => {

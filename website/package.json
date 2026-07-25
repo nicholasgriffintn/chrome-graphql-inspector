@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "prebuild": "pnpm --dir .. run package && cp ../graphql-inspector.zip public/graphql-inspector.zip",
+    "prebuild": "pnpm --dir .. run package && cp ../graphql-inspector.zip public/graphql-inspector.zip && node scripts/write-release-metadata.mjs graphql-inspector.zip",
     "build": "tsc -b && vite build",
     "check": "pnpm test && wrangler deploy --dry-run",
     "deploy": "pnpm run check && wrangler deploy",

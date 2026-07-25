@@ -1,6 +1,8 @@
 import { parseGraphQLPayload, looksGraphQL, parseMultipart, formatGraphQLQuery, formatJson, inferOperationName, inferOperationTypeFromHeaders, safeJsonParse } from "./graphql.js";
-import { toCurl, toFetch, downloadJson } from "./exports.js";
+import { downloadJson, sanitiseOperationsForExport, toCurl, toFetch } from "./exports.js";
 import { headersToObject, requestHeadersForReplay } from "./headers.js";
+import { appendBounded, prependBounded } from "./collections.js";
+import { handleTablistKeydown } from "./tabs.js";
 import { renderCode, renderObjectTree, renderRawCode } from "./panel-renderers.js";
 import {
   badgeLabel,
@@ -23,13 +25,15 @@ import {
 } from "./panel-model.js";
 
 const inspectedTabId = chrome.devtools.inspectedWindow.tabId;
+const ITEM_LIMIT = 1000;
+const STREAM_EVENT_LIMIT = 250;
 const TIMELINE_DATA_LIMIT = 10000;
 const state = { items: [], selectedId: null, ws: new Map(), http: new Map(), graphiql: new Map(), graphiqlLastResponse: "", preserve: false, diagnostics: { background: 0, network: 0, har: 0 } };
 const $ = id => document.getElementById(id);
 const els = Object.fromEntries([
   "modeInspector","modeGraphiql","inspectorView","graphiqlView","inspectorActions","captureTotal","captureNumber",
-  "search","typeFilter","typeSegments","errorsOnly","preserve","requestCount","resetFilters","clear","exportAll","requestListWrap","requests","empty","queryCount","mutationCount","subscriptionCount","unknownCount","errorCount",
-  "noSelection","detail","detailType","detailName","detailEndpoint","detailPersisted","detailMeta","detailStatus","detailDuration","responseState","responseViewToggle","copyResponse","openGraphiql","queryView","variablesView","extensionsView","extensionsSection","responseView","responseRawView","headersView","timingSummary","timelineView","copyCurl","copyFetch","copyJson","tabs",
+  "search","typeFilter","typeSegments","errorsOnly","preserve","requestCount","resetFilters","clear","exportAll","exportAllSensitive","requestListWrap","requests","empty","queryCount","mutationCount","subscriptionCount","unknownCount","errorCount",
+  "noSelection","detail","detailType","detailName","detailEndpoint","detailPersisted","detailMeta","detailStatus","detailDuration","responseState","responseViewToggle","copyResponse","openGraphiql","queryView","variablesView","extensionsView","extensionsSection","responseView","responseRawView","headersView","timingSummary","timelineView","copyCurl","copyCurlSensitive","copyFetch","copyJson","tabs",
   "graphiqlEndpoint","graphiqlMethod","graphiqlUseSelected","graphiqlSend","graphiqlSendLabel","graphiqlOperationName","graphiqlQuery","graphiqlInputTabs","graphiqlVariables","graphiqlHeaders","graphiqlStatus","graphiqlTabs","graphiqlCopyResponse","graphiqlResponse","graphiqlResponseRaw","graphiqlResponseHeaders","toast"
 ].map(id => [id, $(id)]));
 
@@ -37,8 +41,16 @@ const port = chrome.runtime.connect({ name: "graphql-panel" });
 port.postMessage({ type: "register", tabId: inspectedTabId });
 port.onMessage.addListener(handleStreamEvent);
 
-chrome.storage.local.get({ preserve: false }).then(({ preserve }) => { state.preserve = preserve; els.preserve.checked = preserve; });
-chrome.devtools.network.onNavigated.addListener(() => { if (!state.preserve) clear(); });
+const preserveReady = chrome.storage.local.get({ preserve: false })
+  .then(({ preserve }) => {
+    state.preserve = preserve;
+    els.preserve.checked = preserve;
+  });
+chrome.devtools.network.onNavigated.addListener(() => {
+  void preserveReady.then(() => {
+    if (!state.preserve) clear({ clearBuffer: true });
+  });
+});
 chrome.devtools.network.onRequestFinished.addListener(captureRequest);
 loadHarEntries();
 const relativeTimeTimer = setInterval(updateRelativeTimes, 15000);
@@ -222,8 +234,10 @@ function handleWsFrame(message) {
   }
   const item = state.ws.get(key) || state.ws.get(`${message.socketId}:connection`);
   if (!item) return;
-  item.timeline.push({ at: message.at, direction: message.direction, data: summarizeTimelineData(frame) });
-  if (message.direction === "in" && ["next", "data", "error"].includes(type)) item.response.push(frame.payload ?? frame);
+  appendBounded(item.timeline, { at: message.at, direction: message.direction, data: summarizeTimelineData(frame) }, STREAM_EVENT_LIMIT);
+  if (message.direction === "in" && ["next", "data", "error"].includes(type)) {
+    appendBounded(item.response, frame.payload ?? frame, STREAM_EVENT_LIMIT);
+  }
   if (type === "error") item.error = frame.payload || "Subscription error";
   if (["complete", "stop"].includes(type)) {
     item.duration = message.at - item.startedAt;
@@ -238,7 +252,7 @@ function handleWsClose(message) {
   for (const [key, item] of state.ws) {
     if (!key.startsWith(`${message.socketId}:`)) continue;
     item.duration = Math.max(0, message.at - item.startedAt);
-    item.timeline.push({ at: message.at, direction: "close", data: { code: message.code, reason: message.reason } });
+    appendBounded(item.timeline, { at: message.at, direction: "close", data: { code: message.code, reason: message.reason } }, STREAM_EVENT_LIMIT);
     item.searchIndex = buildSearchIndex(item);
     state.ws.delete(key);
     changed = true;
@@ -254,8 +268,8 @@ function handleSseMessage(message) {
     item = { id, source: "sse", url: message.url, method: "SSE", status: 200, startedAt: message.at, duration: null, operationName: "SSE subscription", operationType: "subscription", query: "", variables: {}, requestHeaders: [], responseHeaders: [], response: [], timeline: [] };
     addItem(item, false);
   }
-  item.response.push(parsed);
-  item.timeline.push({ at: message.at, direction: "in", data: summarizeTimelineData(parsed) });
+  appendBounded(item.response, parsed, STREAM_EVENT_LIMIT);
+  appendBounded(item.timeline, { at: message.at, direction: "in", data: summarizeTimelineData(parsed) }, STREAM_EVENT_LIMIT);
   item.searchIndex = buildSearchIndex(item);
   render();
 }
@@ -263,7 +277,7 @@ function handleSseMessage(message) {
 function handleSseEnd(message) {
   const item = state.items.find(candidate => candidate.id === `sse:${message.sourceId}`);
   if (!item) return;
-  item.timeline.push({ at: message.at, direction: message.type === "sse-error" ? "error" : "close", data: message.type });
+  appendBounded(item.timeline, { at: message.at, direction: message.type === "sse-error" ? "error" : "close", data: message.type }, STREAM_EVENT_LIMIT);
   if (message.type === "sse-close" || message.readyState === 2) item.duration = Math.max(0, message.at - item.startedAt);
   if (message.type === "sse-error" && message.readyState === 2) item.error = "EventSource closed after an error.";
   item.searchIndex = buildSearchIndex(item);
@@ -271,11 +285,22 @@ function handleSseEnd(message) {
 }
 
 function addItem(item, renderAfter = true) {
-  state.items.unshift(item);
+  const evictedItems = prependBounded(state.items, item, ITEM_LIMIT);
+  for (const evicted of evictedItems) {
+    for (const [key, activeItem] of state.ws) {
+      if (activeItem === evicted) state.ws.delete(key);
+    }
+  }
   state.selectedId ||= item.id;
   if (renderAfter) render();
 }
-function clear() {
+function clear({ clearBuffer = false } = {}) {
+  if (clearBuffer) {
+    port.postMessage({
+      type: "clear-tab-buffer",
+      tabId: inspectedTabId
+    });
+  }
   state.items = [];
   state.ws.clear();
   state.http.clear();
@@ -360,6 +385,7 @@ function render({ resetScroll = false } = {}) {
   els.resetFilters.disabled = !els.search.value && els.typeFilter.value === "all" && !els.errorsOnly.checked;
   els.clear.disabled = state.items.length === 0;
   els.exportAll.disabled = items.length === 0;
+  els.exportAllSensitive.disabled = items.length === 0;
   els.graphiqlUseSelected.disabled = !isReplayableItem(selected());
 
   for (const button of els.typeSegments.querySelectorAll("[data-type-filter]")) {
@@ -469,6 +495,7 @@ function renderDetail() {
   els.copyResponse.disabled = responsePending;
   els.openGraphiql.disabled = !replayable;
   els.copyCurl.disabled = item.source !== "http";
+  els.copyCurlSensitive.disabled = item.source !== "http";
   els.copyFetch.disabled = item.source !== "http";
   renderCode(els.queryView, item.query ? formatGraphQLQuery(item.query) : (item.persisted ? item.extensions : "No query text captured."));
   renderCode(els.variablesView, item.variables ?? {});
@@ -544,6 +571,8 @@ function setMode(mode) {
   els.modeGraphiql.classList.toggle("active", graphiql);
   els.modeInspector.setAttribute("aria-selected", String(!graphiql));
   els.modeGraphiql.setAttribute("aria-selected", String(graphiql));
+  els.modeInspector.tabIndex = graphiql ? -1 : 0;
+  els.modeGraphiql.tabIndex = graphiql ? 0 : -1;
   els.inspectorView.hidden = graphiql;
   els.graphiqlView.hidden = !graphiql;
   els.inspectorActions.hidden = graphiql;
@@ -668,7 +697,8 @@ function executeGraphiqlFetch(payload) {
       }
       const fetchImpl = window.__PRIVATE_GRAPHQL_INSPECTOR_NATIVE_FETCH__ || window.fetch.bind(window);
       const response = await fetchImpl(url, init);
-      const text = await response.text();
+      const responseText = await response.text();
+      const text = responseText.slice(0, 1_000_000);
       emit({
         ok: true,
         status: response.status,
@@ -761,16 +791,52 @@ function closeActionMenu() {
   if (menu) menu.open = false;
 }
 
+function confirmSensitiveExport() {
+  return confirm(
+    "This export can contain cookies, authorisation tokens and private application data. Continue?"
+  );
+}
+
+function downloadOperations(items) {
+  downloadJson(
+    `graphql-inspector-${new Date().toISOString().replace(/[:.]/g,"-")}.json`,
+    items
+  );
+}
+
 els.search.oninput = () => render({ resetScroll: true });
 els.typeFilter.onchange = () => render({ resetScroll: true });
 els.errorsOnly.onchange = () => render({ resetScroll: true });
 els.preserve.onchange = () => { state.preserve = els.preserve.checked; chrome.storage.local.set({ preserve: state.preserve }); };
 els.resetFilters.onclick = () => { els.search.value = ""; els.typeFilter.value = "all"; els.errorsOnly.checked = false; render({ resetScroll: true }); };
-els.clear.onclick = clear;
-els.exportAll.onclick = () => downloadJson(`graphql-inspector-${new Date().toISOString().replace(/[:.]/g,"-")}.json`, visibleItems());
+els.clear.onclick = () => clear({ clearBuffer: true });
+els.exportAll.onclick = () => {
+  downloadOperations(sanitiseOperationsForExport(visibleItems()));
+  els.exportAll.closest("details").open = false;
+  showToast("Exported without credential headers");
+};
+els.exportAllSensitive.onclick = () => {
+  if (!confirmSensitiveExport()) return;
+  downloadOperations(visibleItems());
+  els.exportAllSensitive.closest("details").open = false;
+};
 els.copyCurl.onclick = () => { if (selected()) copy(toCurl(selected()), "cURL copied"); closeActionMenu(); };
+els.copyCurlSensitive.onclick = () => {
+  if (selected() && confirmSensitiveExport()) {
+    copy(toCurl(selected(), { includeSensitiveHeaders: true }), "cURL with credentials copied");
+  }
+  closeActionMenu();
+};
 els.copyFetch.onclick = () => { if (selected()) copy(toFetch(selected()), "Fetch request copied"); closeActionMenu(); };
-els.copyJson.onclick = () => { if (selected()) copy(JSON.stringify(selected(), null, 2), "Operation JSON copied"); closeActionMenu(); };
+els.copyJson.onclick = () => {
+  if (selected()) {
+    copy(
+      JSON.stringify(sanitiseOperationsForExport([selected()])[0], null, 2),
+      "Redacted operation JSON copied"
+    );
+  }
+  closeActionMenu();
+};
 els.copyResponse.onclick = () => {
   const item = selected();
   if (!item) return;
@@ -790,6 +856,7 @@ els.openGraphiql.onclick = () => {
 };
 els.modeInspector.onclick = () => setMode("inspector");
 els.modeGraphiql.onclick = () => setMode("graphiql");
+els.modeInspector.parentElement.onkeydown = handleTablistKeydown;
 els.graphiqlUseSelected.onclick = () => populateGraphiqlFromSelected(true);
 els.graphiqlSend.onclick = sendGraphiqlRequest;
 els.graphiqlView.onkeydown = event => {
@@ -833,29 +900,35 @@ els.graphiqlInputTabs.onclick = event => {
     const active = tab === button;
     tab.classList.toggle("active", active);
     tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
   }
   for (const panel of els.graphiqlView.querySelectorAll(".input-tab-panel")) {
     panel.hidden = panel.id !== `graphiql-input-${button.dataset.graphiqlInputTab}`;
   }
 };
+els.graphiqlInputTabs.onkeydown = handleTablistKeydown;
 els.tabs.onclick = event => {
   const button = event.target.closest("button[data-tab]"); if (!button) return;
   for (const b of els.tabs.querySelectorAll("button")) {
     const active = b === button;
     b.classList.toggle("active", active);
     b.setAttribute("aria-selected", String(active));
+    b.tabIndex = active ? 0 : -1;
   }
   for (const panel of els.detail.querySelectorAll(".tab-panel")) panel.hidden = panel.id !== `tab-${button.dataset.tab}`;
 };
+els.tabs.onkeydown = handleTablistKeydown;
 els.graphiqlTabs.onclick = event => {
   const button = event.target.closest("button[data-graphiql-tab]"); if (!button) return;
   for (const b of els.graphiqlTabs.querySelectorAll("button")) {
     const active = b === button;
     b.classList.toggle("active", active);
     b.setAttribute("aria-selected", String(active));
+    b.tabIndex = active ? 0 : -1;
   }
   for (const panel of els.graphiqlView.querySelectorAll(".tab-panel")) panel.hidden = panel.id !== `graphiql-tab-${button.dataset.graphiqlTab}`;
 };
+els.graphiqlTabs.onkeydown = handleTablistKeydown;
 document.addEventListener("keydown", event => {
   const editing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
   if (event.key === "/" && !editing && !els.inspectorView.hidden) {

@@ -19,21 +19,37 @@ chrome.runtime.onConnect.addListener(port => {
     if (message.type === "register" && Number.isInteger(message.tabId)) {
       tabId = message.tabId;
       if (!panelPorts.has(tabId)) panelPorts.set(tabId, new Set());
+      const shouldEnableCapture = panelPorts.get(tabId).size === 0;
       panelPorts.get(tabId).add(port);
+      if (shouldEnableCapture) setCaptureState(tabId, true);
       for (const event of httpEventsByTab.get(tabId) || []) {
         try { port.postMessage(event); } catch {}
       }
+      return;
+    }
+    if (
+      message.type === "clear-tab-buffer"
+      && Number.isInteger(message.tabId)
+      && message.tabId === tabId
+    ) {
+      clearTabData(tabId);
     }
   });
   port.onDisconnect.addListener(() => {
     if (tabId === undefined) return;
     panelPorts.get(tabId)?.delete(port);
-    if (!panelPorts.get(tabId)?.size) panelPorts.delete(tabId);
+    if (!panelPorts.get(tabId)?.size) {
+      panelPorts.delete(tabId);
+      clearTabData(tabId);
+      setCaptureState(tabId, false);
+    }
   });
 });
 
 chrome.runtime.onMessage.addListener((message, sender) => {
-  if (message?.source !== "private-graphql-inspector" || !sender.tab?.id) return;
+  if (message?.source !== "private-graphql-inspector" || !Number.isInteger(sender.tab?.id)) return;
+  if (!panelPorts.has(sender.tab.id)) return;
+  if (message.type === "content-ready") setCaptureState(sender.tab.id, true);
   if (message.type?.startsWith("http-request-")) {
     emitHttpEvent(sender.tab.id, { ...message, frameId: sender.frameId });
     return;
@@ -45,17 +61,34 @@ chrome.runtime.onMessage.addListener((message, sender) => {
 
 chrome.tabs?.onRemoved?.addListener(tabId => {
   panelPorts.delete(tabId);
+  clearTabData(tabId);
+});
+
+function clearTabData(tabId) {
   httpEventsByTab.delete(tabId);
   for (const [requestId, record] of httpRecords) {
     if (record.tabId === tabId) httpRecords.delete(requestId);
   }
-});
+}
+
+function setCaptureState(tabId, enabled) {
+  try {
+    chrome.tabs?.sendMessage?.(
+      tabId,
+      { type: "CAPTURE_STATE_CHANGED", enabled },
+      () => {
+        try { void chrome.runtime.lastError; } catch {}
+      }
+    );
+  } catch {}
+}
 
 try {
   chrome.webRequest.onBeforeRequest.addListener(
     details => {
       diagnostics.beforeRequestCount += 1;
       diagnostics.recentRequests = diagnostics.recentRequests.concat({ tabId: details.tabId, method: details.method, url: details.url }).slice(-10);
+      if (!panelPorts.has(details.tabId)) return;
       pruneHttpRecords();
       const requestBody = getWebRequestBody(details);
       const record = {
@@ -98,6 +131,7 @@ try {
 }
 
 function handleBeforeSendHeaders(details) {
+  if (!panelPorts.has(details.tabId)) return;
   const record = httpRecords.get(details.requestId) || {
     requestId: details.requestId,
     tabId: details.tabId,
