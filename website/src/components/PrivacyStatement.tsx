@@ -1,7 +1,8 @@
 const privacyPoints = [
-  "No analytics or telemetry",
-  "No accounts or advertising",
+  "No analytics, telemetry, advertising or accounts",
+  "Capture runs only while the DevTools panel is connected",
   "No captured traffic written to storage",
+  "Credential headers removed from default exports",
 ] as const;
 
 export function PrivacyStatement() {
@@ -14,12 +15,36 @@ export function PrivacyStatement() {
         </svg>
       </div>
       <div className="privacy__copy">
-        <h2 id="privacy-title">Your traffic stays on your device.</h2>
-        <p>
-          Captured requests live temporarily in extension memory. GraphQLi
-          only sends a request when you choose to send it, directly from the
-          page you are inspecting.
-        </p>
+        <h2 id="privacy-title">Captured traffic stays under your control.</h2>
+        <div className="privacy__policy">
+          <p>
+            While the GraphQL DevTools panel is connected, GraphQL Inspector
+            processes endpoints, request and response headers and bodies, and
+            subscription events from the inspected tab. This data can contain
+            website content, personal information, communications, financial
+            details or authentication credentials, depending on the inspected
+            application.
+          </p>
+          <p>
+            Captured traffic remains temporarily in extension memory and is
+            cleared when you clear the panel, close DevTools or close the tab.
+            Only the Preserve log preference is stored in Chrome&apos;s local
+            extension storage. Exports are user initiated; default exports
+            remove recognised credential headers, while including them
+            requires confirmation.
+          </p>
+          <p>
+            GraphQLi sends a request only when you select Send request, from
+            the inspected page to the endpoint you chose. Captured data is not
+            sent to the developer, analytics services or other parties.
+            Information received through Chrome APIs is used only for GraphQL
+            Inspector&apos;s stated purpose and in accordance with the Chrome
+            Web Store User Data Policy, including the Limited Use
+            requirements. Last updated 26 July 2026.{" "}
+            <a href="https://nicholasgriffin.dev/contact">Contact the developer</a>
+            {" "}with privacy questions.
+          </p>
+        </div>
       </div>
       <ul>
         {privacyPoints.map((point) => (
@@ -32,4 +57,3 @@ export function PrivacyStatement() {
     </section>
   );
 }
-

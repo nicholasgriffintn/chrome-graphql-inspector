@@ -126,6 +126,8 @@ test("requests are ignored while no inspector panel is connected", async () => {
 
   assert.deepEqual(globalThis.__PRIVATE_GRAPHQL_INSPECTOR_DIAGNOSTICS__().bufferedTabs, []);
   assert.equal(globalThis.__PRIVATE_GRAPHQL_INSPECTOR_DIAGNOSTICS__().pendingRequests, 0);
+  assert.equal("recentRequests" in globalThis.__PRIVATE_GRAPHQL_INSPECTOR_DIAGNOSTICS__(), false);
+  assert.equal("beforeRequestCount" in globalThis.__PRIVATE_GRAPHQL_INSPECTOR_DIAGNOSTICS__(), false);
 
   delete globalThis.chrome;
   delete globalThis.__PRIVATE_GRAPHQL_INSPECTOR_DIAGNOSTICS__;

@@ -3,7 +3,7 @@ import { looksGraphQL } from "./graphql.js";
 const panelPorts = new Map();
 const httpRecords = new Map();
 const httpEventsByTab = new Map();
-const diagnostics = { webRequestAvailable: Boolean(chrome.webRequest), listenerErrors: [], beforeRequestCount: 0, recentRequests: [] };
+const diagnostics = { webRequestAvailable: Boolean(chrome.webRequest), listenerErrors: [] };
 
 globalThis.__PRIVATE_GRAPHQL_INSPECTOR_DIAGNOSTICS__ = () => ({
   ...diagnostics,
@@ -86,8 +86,6 @@ function setCaptureState(tabId, enabled) {
 try {
   chrome.webRequest.onBeforeRequest.addListener(
     details => {
-      diagnostics.beforeRequestCount += 1;
-      diagnostics.recentRequests = diagnostics.recentRequests.concat({ tabId: details.tabId, method: details.method, url: details.url }).slice(-10);
       if (!panelPorts.has(details.tabId)) return;
       pruneHttpRecords();
       const requestBody = getWebRequestBody(details);

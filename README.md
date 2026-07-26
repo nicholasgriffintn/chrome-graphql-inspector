@@ -43,11 +43,13 @@ Use **GraphQLi** to edit and resend a captured request or write one from scratch
 
 ## Privacy
 
-Captured requests, responses and headers can contain sensitive data. GraphQL Inspector keeps them temporarily in extension memory and does not write them to extension storage or send them to an external service. Closing DevTools or the inspected tab clears this in-memory data.
+While the GraphQL DevTools panel is connected, GraphQL Inspector processes endpoints, request and response headers and bodies, and subscription events from the inspected tab. This data can contain website content, personally identifiable information, personal communications, financial details or authentication credentials, depending on the inspected application.
 
-The only saved setting is **Preserve log**. GraphQLi sends a request only when you select **Send request**, directly from the inspected page to the chosen endpoint.
+Captured traffic remains temporarily in extension memory and is cleared when the panel is cleared, DevTools closes or the inspected tab closes. Only the **Preserve log** preference is stored in Chrome's local extension storage until it is changed or the extension is uninstalled. Exports are user initiated; default exports remove recognised credential headers, while including them requires confirmation.
 
-Access to all sites and network requests is required to detect GraphQL traffic on pages you inspect. Storage access remembers the Preserve log setting. The extension has no accounts, analytics, advertising, remote code or external services.
+GraphQLi sends a request only when **Send request** is selected, from the inspected page to the chosen endpoint. Captured data is not sent to the developer, analytics services or other parties. Access to all sites and network requests is required to detect GraphQL traffic in the tab whose DevTools panel is open. The extension has no accounts, analytics, advertising, remote code or external services.
+
+Information received through Chrome APIs is used only for GraphQL Inspector's stated purpose and in accordance with the Chrome Web Store User Data Policy, including the Limited Use requirements. The privacy policy was last updated on 26 July 2026. [Contact the developer](https://nicholasgriffin.dev/contact) with privacy questions.
 
 ## Development
 
