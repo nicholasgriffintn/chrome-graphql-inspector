@@ -33,13 +33,11 @@ Select a request to view its query, variables, response, headers and timeline. E
 
 Use **GraphQLi** to edit and resend a captured request or write one from scratch. Requests include credentials available to the inspected page and remain subject to its origin and CORS rules.
 
-## Install from source
+## Install
 
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Select **Load unpacked**.
-4. Choose this project folder.
-5. Refresh any page that was already open.
+[Install GraphQL Inspector from the Chrome Web Store](https://chromewebstore.google.com/detail/graphql-inspector/diokgfkmhochccjmgkhpmmjgimeofchp).
+
+For local development, open `chrome://extensions`, enable **Developer mode**, then select **Load unpacked** and choose this repository. Refresh any page that was already open.
 
 ## Privacy
 

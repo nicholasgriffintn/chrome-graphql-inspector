@@ -3,16 +3,8 @@ import { ReleaseProvenance } from "./ReleaseProvenance.tsx";
 
 const steps = [
   {
-    title: "Unzip the download",
-    description: "Keep the extracted folder somewhere you will not delete.",
-  },
-  {
-    title: "Open Chrome extensions",
-    description: "Visit chrome://extensions and enable Developer mode.",
-  },
-  {
-    title: "Load the folder",
-    description: "Select Load unpacked, then choose the extracted folder.",
+    title: "Add it to Chrome",
+    description: "Install GraphQL Inspector from the Chrome Web Store.",
   },
   {
     title: "Open the GraphQL panel",
@@ -24,7 +16,11 @@ export function Installation() {
   return (
     <section className="installation content" id="install" aria-labelledby="install-title">
       <div className="section-heading section-heading--install">
-        <h2 id="install-title">Four simple steps.</h2>
+        <h2 id="install-title">Two simple steps.</h2>
+        <p>
+          Install GraphQL Inspector from the Chrome Web Store, or use the
+          download menu for a ZIP you can load manually.
+        </p>
         <DownloadButton />
         <ReleaseProvenance />
       </div>
