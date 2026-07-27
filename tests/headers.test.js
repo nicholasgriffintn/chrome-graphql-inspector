@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { headersToObject, requestHeadersForReplay } from "../src/headers.js";
+import { headersToObject, isSensitiveHeaderName, requestHeadersForReplay } from "../src/headers.js";
 import { sanitiseOperationsForExport, toCurl, toFetch } from "../src/exports.js";
 
 test("replay headers retain application metadata but remove browser-managed values", () => {
@@ -76,6 +76,20 @@ test("default exports remove captured credentials without changing useful header
     { name: "Content-Type", value: "application/json" },
   ]);
   assert.equal(operation.requestHeaders.length, 3);
+});
+
+test("credential classifier covers common custom token and secret headers", () => {
+  for (const name of [
+    "X-Access-Token",
+    "X-Client-Secret",
+    "Session-Token",
+    "X-Csrf-Token",
+    "X-API-Key",
+    "X-Secret-Key",
+  ]) {
+    assert.equal(isSensitiveHeaderName(name), true, name);
+  }
+  assert.equal(isSensitiveHeaderName("X-Client-Version"), false);
 });
 
 test("header inspection preserves repeated values", () => {

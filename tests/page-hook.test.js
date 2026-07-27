@@ -130,11 +130,6 @@ test("EventSource captures GraphQL next events and completion", () => {
     Array,
   });
 
-  const source = new window.EventSource("/graphql");
-  source.dispatch("next", { data: '{"data":{"viewer":{"id":"1"}}}' });
-  source.dispatch("complete");
-  assert.deepEqual(emitted, []);
-
   messageListener({
     source: window,
     data: {
@@ -143,6 +138,7 @@ test("EventSource captures GraphQL next events and completion", () => {
       enabled: true
     }
   });
+  const source = new window.EventSource("/graphql");
   source.dispatch("next", { data: '{"data":{"viewer":{"id":"1"}}}' });
   source.dispatch("complete");
 
@@ -168,6 +164,16 @@ test("EventSource captures GraphQL next events and completion", () => {
       },
     ],
   );
+
+  messageListener({
+    source: window,
+    data: {
+      source: "private-graphql-inspector-control",
+      type: "capture-state",
+      enabled: false
+    }
+  });
+  assert.equal(window.EventSource, FakeEventSource);
 });
 
 test("captured page payloads are bounded before crossing the page bridge", async () => {
@@ -228,5 +234,71 @@ test("captured page payloads are bounded before crossing the page bridge", async
 
   const complete = emitted.find(message => message.type === "http-request-complete");
   assert.ok(complete);
-  assert.ok(complete.requestBody.length <= 1_000_000);
+  assert.ok(complete.requestBody.length <= 512 * 1024);
+});
+
+test("capture work never delays the page fetch promise", async () => {
+  let messageListener;
+  let resolveCapturedBody;
+  const response = {
+    status: 200,
+    headers: [],
+    clone: () => ({ text: async () => "{}" })
+  };
+  const window = {
+    fetch: async () => response,
+    postMessage: () => {},
+    addEventListener: (type, listener) => {
+      if (type === "message") messageListener = listener;
+    },
+    XMLHttpRequest: undefined,
+    WebSocket: undefined,
+    EventSource: undefined
+  };
+  class SlowCaptureRequest {
+    constructor() {
+      this.url = "https://example.test/graphql";
+      this.method = "POST";
+      this.headers = [];
+    }
+
+    clone() {
+      return {
+        text: () => new Promise(resolve => {
+          resolveCapturedBody = resolve;
+        })
+      };
+    }
+  }
+
+  vm.runInNewContext(pageHookSource, {
+    window,
+    Request: SlowCaptureRequest,
+    location: { href: "https://example.test/" },
+    crypto: { randomUUID: () => "request-id" },
+    URL,
+    URLSearchParams,
+    JSON,
+    Date,
+    Object,
+    Array,
+    Promise
+  });
+  messageListener({
+    source: window,
+    data: {
+      source: "private-graphql-inspector-control",
+      type: "capture-state",
+      enabled: true
+    }
+  });
+
+  const fetchResult = window.fetch("https://example.test/graphql");
+  const outcome = await Promise.race([
+    fetchResult.then(() => "resolved"),
+    new Promise(resolve => setImmediate(() => resolve("delayed")))
+  ]);
+
+  assert.equal(outcome, "resolved");
+  resolveCapturedBody('{"query":"query Viewer { viewer { id } }"}');
 });

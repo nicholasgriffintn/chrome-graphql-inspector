@@ -1,15 +1,15 @@
-import { parseGraphQLPayload, looksGraphQL, parseMultipart, formatGraphQLQuery, formatJson, inferOperationName, inferOperationTypeFromHeaders, safeJsonParse } from "./graphql.js";
+import { parseGraphQLPayload, looksGraphQL, isLikelyGraphQLRequest, parseMultipart, formatGraphQLQuery, formatJson, inferOperationName, inferOperationTypeFromHeaders, safeJsonParse } from "./graphql.js";
 import { downloadJson, sanitiseOperationsForExport, toCurl, toFetch } from "./exports.js";
 import { headersToObject, requestHeadersForReplay } from "./headers.js";
-import { appendBounded, prependBounded } from "./collections.js";
+import { appendBounded, prependWithinBudget, trimWithinBudget } from "./collections.js";
 import { handleTablistKeydown } from "./tabs.js";
 import { renderCode, renderObjectTree, renderRawCode } from "./panel-renderers.js";
+import { createRequestList } from "./request-list.js";
 import {
   badgeLabel,
   badgeType,
   buildSearchIndex,
   boundedJson,
-  escapeHtml,
   filterItems,
   findClosestHttpRecord,
   findEquivalentHttpCapture,
@@ -20,12 +20,13 @@ import {
   isErrorItem,
   isReplayableItem,
   operationStatusLabel,
-  parseOptionalJson,
-  shortUrl
+  parseOptionalJson
 } from "./panel-model.js";
 
 const inspectedTabId = chrome.devtools.inspectedWindow.tabId;
 const ITEM_LIMIT = 1000;
+const ITEM_BYTE_LIMIT = 16 * 1024 * 1024;
+const CAPTURE_TEXT_LIMIT = 512 * 1024;
 const STREAM_EVENT_LIMIT = 250;
 const TIMELINE_DATA_LIMIT = 10000;
 const state = { items: [], selectedId: null, ws: new Map(), http: new Map(), graphiql: new Map(), graphiqlLastResponse: "", preserve: false, diagnostics: { background: 0, network: 0, har: 0 } };
@@ -36,6 +37,12 @@ const els = Object.fromEntries([
   "noSelection","detail","detailType","detailName","detailEndpoint","detailPersisted","detailMeta","detailStatus","detailDuration","responseState","responseViewToggle","copyResponse","openGraphiql","queryView","variablesView","extensionsView","extensionsSection","responseView","responseRawView","headersView","timingSummary","timelineView","copyCurl","copyCurlSensitive","copyFetch","copyJson","tabs",
   "graphiqlEndpoint","graphiqlMethod","graphiqlUseSelected","graphiqlSend","graphiqlSendLabel","graphiqlOperationName","graphiqlQuery","graphiqlInputTabs","graphiqlVariables","graphiqlHeaders","graphiqlStatus","graphiqlTabs","graphiqlCopyResponse","graphiqlResponse","graphiqlResponseRaw","graphiqlResponseHeaders","toast"
 ].map(id => [id, $(id)]));
+const requestList = createRequestList({
+  list: els.requests,
+  viewport: els.requestListWrap,
+  onSelect: selectRequest,
+  onKeydown: handleRequestKeydown,
+});
 
 const port = chrome.runtime.connect({ name: "graphql-panel" });
 port.postMessage({ type: "register", tabId: inspectedTabId });
@@ -58,9 +65,17 @@ relativeTimeTimer.unref?.();
 
 async function captureRequest(request) {
   const entry = request.request;
+  const postData = boundedCaptureText(entry.postData?.text);
+  const requestLooksGraphQL = isLikelyGraphQLRequest({
+    url: entry.url,
+    method: entry.method,
+    postData,
+    requestHeaders: entry.headers || [],
+    responseHeaders: request.response.headers || [],
+  });
+  if (!requestLooksGraphQL) return;
   let responseText = "";
   try { responseText = await getRequestContent(request); } catch {}
-  const postData = entry.postData?.text || "";
   if (!looksGraphQL({ url: entry.url, method: entry.method, postData, responseText })) return;
   state.diagnostics.network += 1;
   const startedAt = Date.parse(request.startedDateTime) || Date.now();
@@ -88,7 +103,14 @@ function loadHarEntries() {
     for (const entry of har?.entries || []) {
       const request = entry.request || {};
       const response = entry.response || {};
-      const postData = request.postData?.text || "";
+      const postData = boundedCaptureText(request.postData?.text);
+      if (!isLikelyGraphQLRequest({
+        url: request.url,
+        method: request.method,
+        postData,
+        requestHeaders: request.headers || [],
+        responseHeaders: response.headers || [],
+      })) continue;
       const responseText = decodeHarContent(response.content);
       if (!looksGraphQL({ url: request.url, method: request.method, postData, responseText })) continue;
       addHttpItems({
@@ -125,8 +147,8 @@ function handleHttpEvent(message) {
   const postData = message.requestBody || "";
   const responseText = message.responseText || "";
   if (!looksGraphQL({ url: message.url, method: message.method, postData, responseText })) return;
-  const captureSource = message.source === "background" ? "background" : "hook";
-  const requestId = captureSource === "hook" ? `hook:${message.requestId}` : message.requestId;
+  const captureSource = message.source === "background" ? "background" : "page-hook";
+  const requestId = captureSource === "page-hook" ? `hook:${message.requestId}` : message.requestId;
   if (captureSource === "background") state.diagnostics.background += 1;
   pruneHttpRecords();
   state.http.set(requestId, {
@@ -186,6 +208,7 @@ function addHttpItems(event, renderAfter = true) {
       batchIndex,
       batchSize: payloads.length,
       captureSource: event.source,
+      captureTrust: event.source === "page-hook" ? "page" : "extension",
       captureSources,
       captureIds,
       phase: event.phase,
@@ -208,7 +231,13 @@ function addHttpItems(event, renderAfter = true) {
     item.searchIndex = buildSearchIndex(item);
     if (existing) {
       const timeline = mergeTimeline(existing.timeline, item.timeline);
-      if (existing.phase !== "start" && event.phase === "start") {
+      if (
+        event.source === "page-hook"
+        && existing.phase !== "start"
+        && existing.captureTrust === "extension"
+      ) {
+        Object.assign(existing, { captureSources, captureIds, timeline });
+      } else if (existing.phase !== "start" && event.phase === "start") {
         Object.assign(existing, { captureSources, captureIds, timeline });
       } else {
         Object.assign(existing, item, { timeline });
@@ -218,6 +247,7 @@ function addHttpItems(event, renderAfter = true) {
       addItem(item, false);
     }
   });
+  enforceItemBudget();
   if (renderAfter) render();
 }
 
@@ -244,7 +274,7 @@ function handleWsFrame(message) {
     state.ws.delete(key);
   }
   item.searchIndex = buildSearchIndex(item);
-  render();
+  scheduleRender();
 }
 
 function handleWsClose(message) {
@@ -257,7 +287,7 @@ function handleWsClose(message) {
     state.ws.delete(key);
     changed = true;
   }
-  if (changed) render();
+  if (changed) scheduleRender();
 }
 
 function handleSseMessage(message) {
@@ -271,7 +301,7 @@ function handleSseMessage(message) {
   appendBounded(item.response, parsed, STREAM_EVENT_LIMIT);
   appendBounded(item.timeline, { at: message.at, direction: "in", data: summarizeTimelineData(parsed) }, STREAM_EVENT_LIMIT);
   item.searchIndex = buildSearchIndex(item);
-  render();
+  scheduleRender();
 }
 
 function handleSseEnd(message) {
@@ -281,18 +311,34 @@ function handleSseEnd(message) {
   if (message.type === "sse-close" || message.readyState === 2) item.duration = Math.max(0, message.at - item.startedAt);
   if (message.type === "sse-error" && message.readyState === 2) item.error = "EventSource closed after an error.";
   item.searchIndex = buildSearchIndex(item);
-  render();
+  scheduleRender();
 }
 
 function addItem(item, renderAfter = true) {
-  const evictedItems = prependBounded(state.items, item, ITEM_LIMIT);
+  const evictedItems = prependWithinBudget(state.items, item, {
+    maxItems: ITEM_LIMIT,
+    maxBytes: ITEM_BYTE_LIMIT,
+  });
+  releaseEvictedItems(evictedItems);
+  state.selectedId ||= item.id;
+  if (renderAfter) render();
+}
+
+function enforceItemBudget() {
+  const evictedItems = trimWithinBudget(state.items, {
+    maxItems: ITEM_LIMIT,
+    maxBytes: ITEM_BYTE_LIMIT,
+    oldestAt: "end",
+  });
+  releaseEvictedItems(evictedItems);
+}
+
+function releaseEvictedItems(evictedItems) {
   for (const evicted of evictedItems) {
     for (const [key, activeItem] of state.ws) {
       if (activeItem === evicted) state.ws.delete(key);
     }
   }
-  state.selectedId ||= item.id;
-  if (renderAfter) render();
 }
 function clear({ clearBuffer = false } = {}) {
   if (clearBuffer) {
@@ -313,19 +359,39 @@ function getRequestContent(request) {
   return new Promise(resolve => {
     request.getContent((content, encoding) => {
       if (encoding === "base64") {
-        try { resolve(atob(content || "")); } catch { resolve(content || ""); }
+        try {
+          resolve(decodeBoundedBase64(content));
+        } catch {
+          resolve(boundedCaptureText(content));
+        }
         return;
       }
-      resolve(content || "");
+      resolve(boundedCaptureText(content));
     });
   });
 }
 function decodeHarContent(content = {}) {
   if (!content.text) return "";
   if (content.encoding === "base64") {
-    try { return atob(content.text); } catch { return content.text; }
+    try {
+      return decodeBoundedBase64(content.text);
+    } catch {
+      return boundedCaptureText(content.text);
+    }
   }
-  return content.text;
+  return boundedCaptureText(content.text);
+}
+
+function boundedCaptureText(value) {
+  const text = typeof value === "string" ? value : "";
+  return text.length > CAPTURE_TEXT_LIMIT ? text.slice(0, CAPTURE_TEXT_LIMIT) : text;
+}
+
+function decodeBoundedBase64(value) {
+  const encodedLimit = Math.ceil(CAPTURE_TEXT_LIMIT / 3) * 4;
+  const bounded = String(value || "").slice(0, encodedLimit);
+  const completeQuartets = bounded.slice(0, bounded.length - (bounded.length % 4));
+  return boundedCaptureText(atob(completeQuartets));
 }
 function findMatchingHttpRequest(url, method, requestBody, startedAt) {
   return findClosestHttpRecord(state.http.values(), {
@@ -360,6 +426,18 @@ function summarizeTimelineData(value, rawLength) {
     size,
     preview: text.slice(0, 1000)
   };
+}
+
+let renderFrame;
+function scheduleRender() {
+  if (renderFrame !== undefined) return;
+  enforceItemBudget();
+  const schedule = globalThis.requestAnimationFrame || (callback => setTimeout(callback, 0));
+  renderFrame = schedule(() => {
+    renderFrame = undefined;
+    render();
+  });
+  renderFrame?.unref?.();
 }
 function visibleItems() {
   return filterItems(state.items, {
@@ -401,43 +479,29 @@ function render({ resetScroll = false } = {}) {
 
   els.empty.hidden = items.length > 0;
   renderEmptyState();
-  els.requests.replaceChildren(...items.map(item => {
-    const div = document.createElement("div");
-    const error = isErrorItem(item);
-    const selectedRow = item.id === state.selectedId;
-    div.className = `request${item.id === state.selectedId ? " selected" : ""}${error ? " error" : ""}`;
-    div.role = "option";
-    div.tabIndex = selectedRow ? 0 : -1;
-    div.dataset.requestId = item.id;
-    div.setAttribute("aria-selected", String(selectedRow));
-    div.innerHTML = `
-      <span class="badge ${badgeType(item)}">${escapeHtml(badgeLabel(item))}</span>
-      <span class="request-main">
-        <span class="operation" title="${escapeHtml(item.operationName)}">${escapeHtml(item.operationName)}</span>
-        <span class="endpoint" title="${escapeHtml(item.url)}">${escapeHtml(shortUrl(item.url))}</span>
-      </span>
-      <span class="request-meta">
-        <span class="request-status">${escapeHtml(operationStatusLabel(item))}</span>
-        <span>${escapeHtml(formatDuration(item.duration))}</span>
-        <span class="request-time" data-started-at="${escapeHtml(String(item.startedAt))}">${escapeHtml(formatRelativeTime(item.startedAt))}</span>
-      </span>`;
-    div.onclick = () => selectRequest(item.id);
-    div.onkeydown = event => handleRequestKeydown(event, items, item.id);
-    return div;
-  }));
   els.requestListWrap.scrollTop = scrollTop;
+  requestList.render(items, state.selectedId);
   renderDetail();
 }
 
 function selectRequest(itemId) {
   state.selectedId = itemId;
+  requestList.ensureVisible(visibleItems(), itemId);
   for (const request of els.requests.children) {
+    if (!request.dataset.requestId) continue;
     const selected = request.dataset.requestId === itemId;
     request.classList.toggle("selected", selected);
     request.setAttribute("aria-selected", String(selected));
     request.tabIndex = selected ? 0 : -1;
   }
   renderDetail();
+}
+
+function scheduleRequestRowRender() {
+  requestList.schedule(() => ({
+    items: visibleItems(),
+    selectedId: state.selectedId,
+  }));
 }
 
 function renderEmptyState() {
@@ -662,7 +726,7 @@ function sendGraphiqlRequest() {
   });
 }
 
-function executeGraphiqlFetch(payload) {
+  function executeGraphiqlFetch(payload) {
   const startedAt = Date.now();
   const emit = result => window.postMessage({
     source: "private-graphql-inspector",
@@ -675,6 +739,30 @@ function executeGraphiqlFetch(payload) {
 
   (async () => {
     try {
+      const readBoundedResponse = async response => {
+        const reader = response.body?.getReader?.();
+        if (!reader) return (await response.text()).slice(0, 512 * 1024);
+        const decoder = new TextDecoder();
+        let bytesRead = 0;
+        let text = "";
+        try {
+          while (bytesRead < 512 * 1024) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+            const chunk = bytes.subarray(0, (512 * 1024) - bytesRead);
+            bytesRead += chunk.byteLength;
+            text += decoder.decode(chunk, { stream: bytesRead < 512 * 1024 });
+            if (chunk.byteLength < bytes.byteLength) break;
+          }
+          text += decoder.decode();
+        } finally {
+          try {
+            await reader.cancel();
+          } catch {}
+        }
+        return text;
+      };
       const requestBody = {
         query: payload.query,
         variables: payload.variables && Object.keys(payload.variables).length ? payload.variables : undefined,
@@ -697,8 +785,7 @@ function executeGraphiqlFetch(payload) {
       }
       const fetchImpl = window.__PRIVATE_GRAPHQL_INSPECTOR_NATIVE_FETCH__ || window.fetch.bind(window);
       const response = await fetchImpl(url, init);
-      const responseText = await response.text();
-      const text = responseText.slice(0, 1_000_000);
+      const text = await readBoundedResponse(response);
       emit({
         ok: true,
         status: response.status,
@@ -873,6 +960,7 @@ els.typeSegments.onclick = event => {
   els.typeFilter.value = button.dataset.typeFilter;
   render({ resetScroll: true });
 };
+els.requestListWrap.onscroll = scheduleRequestRowRender;
 for (const button of document.querySelectorAll("[data-summary-filter]")) {
   button.onclick = () => {
     els.typeFilter.value = els.typeFilter.value === button.dataset.summaryFilter

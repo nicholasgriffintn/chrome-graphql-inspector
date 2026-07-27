@@ -1,11 +1,10 @@
 let active = true;
-const MAX_TEXT_LENGTH = 1_000_000;
-const MAX_MESSAGE_LENGTH = 2_000_000;
-const MAX_MESSAGES_PER_SECOND = 500;
+const MAX_TEXT_LENGTH = 512 * 1024;
+const MAX_MESSAGE_LENGTH = 1024 * 1024;
+const MAX_MESSAGES_PER_SECOND = 100;
 let messageWindowStartedAt = Date.now();
 let messageWindowCount = 0;
 const allowedMessageTypes = new Set([
-  "content-ready",
   "graphiql-result",
   "http-request-start",
   "http-request-complete",

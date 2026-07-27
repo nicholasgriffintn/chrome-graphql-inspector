@@ -8,7 +8,7 @@ const steps = [
   },
   {
     title: "Open the GraphQL panel",
-    description: "Open DevTools on a page and reload if no requests appear.",
+    description: "Open DevTools and reload, or enable optional Background capture from the toolbar popup.",
   },
 ] as const;
 

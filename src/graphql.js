@@ -129,6 +129,27 @@ export function looksGraphQL({ url = "", method = "", postData = "", responseTex
   return hasGraphQLResponseShape(responseText);
 }
 
+export function isLikelyGraphQLRequest({
+  url = "",
+  method = "",
+  postData = "",
+  requestHeaders = [],
+  responseHeaders = [],
+}) {
+  if (looksGraphQL({ url, method, postData })) return true;
+  const contentTypes = [...requestHeaders, ...responseHeaders]
+    .filter(header => String(header?.name || "").toLowerCase() === "content-type")
+    .map(header => String(header?.value || ""));
+  if (contentTypes.some(value => /application\/(?:graphql|graphql-response\+json)/i.test(value))) {
+    return true;
+  }
+  try {
+    return /(?:^|\/)graphql(?:\/|$)/i.test(new URL(url, "https://example.invalid").pathname);
+  } catch {
+    return /(?:^|\/)graphql(?:[/?#]|$)/i.test(String(url));
+  }
+}
+
 function hasGraphQLPayloadShape(value) {
   const entries = Array.isArray(value) ? value : [value];
   return entries.some(item => {

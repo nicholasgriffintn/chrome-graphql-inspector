@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 
 const panelScript = readFileSync(new URL("../src/panel.js", import.meta.url), "utf8");
 const panelHtml = readFileSync(new URL("../src/panel.html", import.meta.url), "utf8");
+const requestListScript = readFileSync(new URL("../src/request-list.js", import.meta.url), "utf8");
 
 function sourceBetween(start, end) {
   const startIndex = panelScript.indexOf(start);
@@ -14,11 +15,11 @@ function sourceBetween(start, end) {
 }
 
 test("selecting a captured request does not rebuild the scrollable list", () => {
-  const renderSource = sourceBetween("function render(", "function renderEmptyState()");
   const selectionSource = sourceBetween("function selectRequest(", "function renderEmptyState()");
   const keyboardSource = sourceBetween("function handleRequestKeydown(", "function focusSelectedRequest()");
 
-  assert.match(renderSource, /div\.onclick = \(\) => selectRequest\(item\.id\)/);
+  assert.match(panelScript, /onSelect:\s*selectRequest/);
+  assert.match(requestListScript, /row\.onclick = \(\) => onSelect\(item\.id\)/);
   assert.match(selectionSource, /classList\.toggle\("selected", selected\)/);
   assert.match(selectionSource, /setAttribute\("aria-selected", String\(selected\)\)/);
   assert.match(selectionSource, /request\.tabIndex = selected \? 0 : -1/);
@@ -77,7 +78,17 @@ test("tab controls expose their panels and support arrow-key navigation", () => 
 
 test("panel capture storage is explicitly bounded", () => {
   assert.match(panelScript, /const ITEM_LIMIT = 1000/);
-  assert.match(panelScript, /prependBounded\(state\.items, item, ITEM_LIMIT\)/);
+  assert.match(panelScript, /const ITEM_BYTE_LIMIT = 16 \* 1024 \* 1024/);
+  assert.match(panelScript, /prependWithinBudget\(state\.items, item/);
+  assert.match(panelScript, /maxBytes:\s*ITEM_BYTE_LIMIT/);
   assert.match(panelScript, /const STREAM_EVENT_LIMIT = 250/);
   assert.match(panelScript, /appendBounded\(item\.timeline/);
+});
+
+test("large request lists use windowed rows and stream updates share one frame", () => {
+  assert.match(panelScript, /createRequestList/);
+  assert.match(requestListScript, /items\s*[.]slice[(]start, end[)]/);
+  assert.match(requestListScript, /const VIRTUALISE_AFTER = 100/);
+  assert.match(panelScript, /function scheduleRender\(\)/);
+  assert.match(panelScript, /requestAnimationFrame/);
 });

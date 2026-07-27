@@ -1,6 +1,11 @@
 const BROWSER_MANAGED_HEADER = /^(?:accept-encoding|connection|content-encoding|content-length|cookie|dnt|host|origin|referer|te|trailer|transfer-encoding|upgrade|user-agent|via|proxy-|sec-)/i;
-const SENSITIVE_HEADER = /^(?:authorization|cookie|set-cookie|proxy-authorization|x-api-key|api-key|x-auth-token)$/i;
 const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+export function isSensitiveHeaderName(value) {
+  const name = String(value || "").trim();
+  return /^(?:authorization|cookie|set-cookie|proxy-authorization)$/i.test(name)
+    || /(?:^|[-_])(?:api[-_]?key|access[-_]?token|auth[-_]?token|client[-_]?secret|session[-_]?token|refresh[-_]?token|id[-_]?token|csrf[-_]?token|credentials?|secret)(?:$|[-_])/i.test(name);
+}
 
 export function requestHeadersForReplay(
   headers = [],
@@ -44,6 +49,6 @@ export function headersToObject(headers = []) {
 export function headersWithoutSensitiveValues(headers = []) {
   return headers.filter(header => {
     const name = String(header?.name || "").trim();
-    return name && !SENSITIVE_HEADER.test(name);
+    return name && !isSensitiveHeaderName(name);
   });
 }

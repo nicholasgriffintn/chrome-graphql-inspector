@@ -26,10 +26,23 @@
       </ol>
     </section>
 
+    <section class="settings-section" aria-labelledby="capture-setting-title">
+      <h2 id="capture-setting-title">Capture preference</h2>
+      <label class="setting-row">
+        <span>
+          <strong>Background capture</strong>
+          <small>Start in every open tab before DevTools. Uses extra memory.</small>
+        </span>
+        <input id="backgroundCapture" type="checkbox" role="switch" aria-describedby="captureStatus">
+      </label>
+      <p id="captureStatus" class="setting-status" aria-live="polite"></p>
+    </section>
+
     <footer>
       <i aria-hidden="true"></i>
       Queries, mutations and subscriptions appear together.
     </footer>
   </main>
+  <script type="module" src="popup.js"></script>
 </body>
 </html>

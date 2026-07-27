@@ -1,7 +1,7 @@
 const privacyPoints = [
   "No analytics, telemetry, advertising or accounts",
-  "Capture runs only while the DevTools panel is connected",
-  "No captured traffic written to storage",
+  "Background capture is disabled by default",
+  "No captured traffic written to persistent storage",
   "Credential headers removed from default exports",
 ] as const;
 
@@ -20,18 +20,21 @@ export function PrivacyStatement() {
           <p>
             While the GraphQL DevTools panel is connected, GraphQL Inspector
             processes endpoints, request and response headers and bodies, and
-            subscription events from the inspected tab. This data can contain
-            website content, personal information, communications, financial
-            details or authentication credentials, depending on the inspected
-            application.
+            subscription events from the inspected tab. If you enable
+            Background capture, this processing also occurs in open tabs
+            before their DevTools panels connect. This data can contain website
+            content, personal information, communications, financial details
+            or authentication credentials, depending on the inspected application.
           </p>
           <p>
-            Captured traffic remains temporarily in extension memory and is
-            cleared when you clear the panel, close DevTools or close the tab.
-            Only the Preserve log preference is stored in Chrome&apos;s local
-            extension storage. Exports are user initiated; default exports
-            remove recognised credential headers, while including them
-            requires confirmation.
+            Captured traffic remains temporarily in extension memory.
+            Background traffic uses Chrome&apos;s memory-backed session storage
+            so it can survive service-worker suspension; it is cleared when
+            you disable the setting, close the tab or restart Chrome. Only the
+            Preserve log and Background capture preferences are stored in
+            Chrome&apos;s persistent local extension storage. Exports are user
+            initiated; default exports remove recognised credential headers,
+            while including them requires confirmation.
           </p>
           <p>
             GraphQLi sends a request only when you select Send request, from
@@ -40,7 +43,7 @@ export function PrivacyStatement() {
             Information received through Chrome APIs is used only for GraphQL
             Inspector&apos;s stated purpose and in accordance with the Chrome
             Web Store User Data Policy, including the Limited Use
-            requirements. Last updated 26 July 2026.{" "}
+            requirements. Last updated 27 July 2026.{" "}
             <a href="https://nicholasgriffin.dev/contact">Contact the developer</a>
             {" "}with privacy questions.
           </p>

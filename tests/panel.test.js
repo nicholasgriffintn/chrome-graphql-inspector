@@ -87,6 +87,48 @@ test("renders a background GraphQL HTTP event", async () => {
   assert.match(document.getElementById("queryView").textContent, /viewer \{\n\s+id/);
 });
 
+test("page-hook captures cannot overwrite a trusted completed response", async () => {
+  const { listeners } = setupPanelDom();
+  const startedAt = Date.now();
+  const requestBody = JSON.stringify({
+    operationName: "TrustedQuery",
+    query: "query TrustedQuery { viewer { id } }"
+  });
+
+  await import(`../src/panel.js?trusted-capture=${Date.now()}`);
+  listeners[0]({
+    type: "http-request-complete",
+    source: "background",
+    requestId: "trusted-request",
+    url: "https://example.test/graphql",
+    method: "POST",
+    status: 200,
+    requestHeaders: [],
+    responseHeaders: [{ name: "content-type", value: "application/json" }],
+    requestBody,
+    responseText: '{"data":{"source":"trusted"}}',
+    startedAt,
+    at: startedAt + 10
+  });
+  listeners[0]({
+    type: "http-request-complete",
+    source: "page-hook",
+    requestId: "forged-request",
+    url: "https://example.test/graphql",
+    method: "POST",
+    status: 200,
+    requestHeaders: [],
+    responseHeaders: [{ name: "content-type", value: "application/json" }],
+    requestBody,
+    responseText: '{"data":{"source":"forged"}}',
+    startedAt: startedAt + 1,
+    at: startedAt + 11
+  });
+
+  assert.match(document.getElementById("responseRawView").textContent, /trusted/);
+  assert.doesNotMatch(document.getElementById("responseRawView").textContent, /forged/);
+});
+
 test("renders GraphQL requests from HAR backfill", async () => {
   setupPanelDom({ harEntries: sampleHarEntries() });
 

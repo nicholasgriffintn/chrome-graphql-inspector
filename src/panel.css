@@ -369,6 +369,10 @@ svg {
   min-height: 100%;
 }
 
+.request-list-spacer {
+  pointer-events: none;
+}
+
 .request {
   position: relative;
   display: grid;
